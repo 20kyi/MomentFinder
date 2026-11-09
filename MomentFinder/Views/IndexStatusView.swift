@@ -29,7 +29,7 @@ struct IndexStatusView: View {
 
         NavigationStack {
             Form {
-                Section("분석 상태") {
+                Section {
                     LabeledContent("검색 가능", value: "\(model.indexedAssetCount)개")
                     LabeledContent("진행", value: "\(model.progress.indexed) / \(model.progress.total)")
                     if model.progress.subjectTotal > 0 {
@@ -48,6 +48,12 @@ struct IndexStatusView: View {
                         Button("지금 분석") { model.startIndexing() }
                             .disabled(!model.isEngineReady)
                     }
+                } header: {
+                    Text("분석 상태")
+                } footer: {
+                    #if os(iOS)
+                    Text("충전 중이고 네트워크에 연결되어 있으면 백그라운드에서 이어서 분석해요.")
+                    #endif
                 }
 
                 Section {

@@ -5,36 +5,42 @@ struct SearchScreen: View {
     @State private var query = ""
     @State private var selection: ResultItem?
     @State private var showsIndexStatus = false
-    @State private var showsPeople = false
+    @State private var isSearchPresented = false
     @State private var scrollPosition = ScrollPosition(edge: .top)
 
-    private static let examples = ["고양이 하품", "고양이가 하품하는 동영상", "바닷가 일몰", "생일 케이크 촛불", "눈 오는 거리"]
+    /// 종류 탭과 이름 칩은 검색 결과를 거르는 필터라서 검색 중일 때만 보여줍니다.
+    /// 시스템 searchScopes 는 검색창이 활성일 때만 보여서, 추천 검색어로 검색하거나 상세 화면에서 돌아오면 사라집니다.
+    private var showsFilters: Bool {
+        isSearchPresented || !query.isEmpty || !model.selectedNames.isEmpty
+    }
 
     var body: some View {
-        @Bindable var model = model
-
         NavigationStack {
             content
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    if !model.subjectNames.isEmpty {
-                        SubjectChipsBar()
+                .topBar {
+                    if showsFilters {
+                        SearchFilterBar()
+                            .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
+                .animation(.default, value: showsFilters)
                 .navigationTitle("Moment Finder")
-                .searchable(text: $query, prompt: "예: 고양이 하품")
-                .searchScopes($model.scope) {
-                    ForEach(MediaScope.allCases) { Text($0.title).tag($0) }
-                }
+                #if os(iOS)
+                .toolbarTitleDisplayMode(showsFilters ? .inline : .inlineLarge)
+                #endif
+                .searchable(text: $query, isPresented: $isSearchPresented, prompt: "예: 고양이 하품")
                 .onSubmit(of: .search) { runSearch() }
                 .onChange(of: model.scope) { if !query.isEmpty || !model.selectedNames.isEmpty { runSearch() } }
                 .onChange(of: model.selectedNames) { runSearch() }
                 .onChange(of: query) { if query.isEmpty { runSearch() } }
                 .toolbar {
-                    ToolbarItem(placement: .navigation) {
-                        Button { showsPeople = true } label: {
-                            Label("인물·반려동물", systemImage: "person.2")
+                    if showsFilters {
+                        ToolbarItem(placement: .navigation) {
+                            Button(action: returnHome) {
+                                Label("홈으로", systemImage: "chevron.backward")
+                            }
+                            .accessibilityIdentifier("search-back-button")
                         }
-                        .accessibilityIdentifier("people-button")
                     }
                     ToolbarItem(placement: .primaryAction) {
                         Button { showsIndexStatus = true } label: { IndexStatusBadge() }
@@ -42,7 +48,6 @@ struct SearchScreen: View {
                 }
                 .sheet(isPresented: $showsIndexStatus) { IndexStatusView() }
                 .navigationDestination(item: $selection) { AssetDetailView(item: $0, in: model.results) }
-                .navigationDestination(isPresented: $showsPeople) { PeopleView() }
         }
     }
 
@@ -54,7 +59,10 @@ struct SearchScreen: View {
             if let interpreted = model.interpretedQuery {
                 noMatchView(interpreted)
             } else {
-                examplesView
+                HomeView(onShowStatus: { showsIndexStatus = true }) { example in
+                    query = example
+                    runSearch()
+                }
             }
         } else {
             resultsGrid
@@ -152,36 +160,13 @@ struct SearchScreen: View {
         .accessibilityIdentifier("new-results-button")
     }
 
-    private var examplesView: some View {
-        List {
-            Section {
-                IndexSummaryRow()
-            }
-            Section {
-                NavigationLink {
-                    PeopleView()
-                } label: {
-                    LabeledContent {
-                        if !model.groups.isEmpty { Text("\(model.groups.count)") }
-                    } label: {
-                        Label("인물·반려동물", systemImage: "person.2")
-                    }
-                }
-            } footer: {
-                Text(model.subjectNames.isEmpty
-                     ? "이름을 붙이면 \"초코 산책하는 동영상\"처럼 이름으로 검색할 수 있어요."
-                     : "\"\(model.subjectNames[0]) 웃는 사진\"처럼 이름을 넣어 검색해 보세요.")
-            }
-            Section("이렇게 검색해 보세요") {
-                ForEach(Self.examples, id: \.self) { example in
-                    Button {
-                        query = example
-                        runSearch()
-                    } label: {
-                        Label(example, systemImage: "magnifyingglass")
-                    }
-                }
-            }
+    /// 검색어와 필터를 모두 지워 홈 화면으로 돌아갑니다.
+    private func returnHome() {
+        withAnimation {
+            isSearchPresented = false
+            query = ""
+            model.selectedNames = []
+            model.scope = .all
         }
     }
 
@@ -189,6 +174,42 @@ struct SearchScreen: View {
         let text = query
         scrollPosition.scrollTo(edge: .top)
         Task { await model.search(text) }
+    }
+}
+
+/// 검색 결과 위에 붙는 필터 바. 전체/사진/동영상 탭과 이름 칩을 함께 보여줍니다.
+private struct SearchFilterBar: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+
+        VStack(spacing: 0) {
+            Picker("종류", selection: $model.scope) {
+                ForEach(MediaScope.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal)
+            .padding(.vertical, 6)
+            .accessibilityIdentifier("scope-picker")
+
+            if !model.subjectNames.isEmpty {
+                SubjectChipsBar()
+            }
+        }
+    }
+}
+
+private extension View {
+    /// iOS 26 부터는 스크롤 가장자리 흐림 효과와 어울리도록 배경 없는 safeAreaBar 를 씁니다.
+    @ViewBuilder
+    func topBar<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            safeAreaBar(edge: .top, spacing: 0, content: content)
+        } else {
+            safeAreaInset(edge: .top, spacing: 0) { content().background(.bar) }
+        }
     }
 }
 
@@ -221,60 +242,6 @@ private struct SubjectChipsBar: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 6)
-        }
-        .background(.bar)
-    }
-}
-
-struct VideoSceneProgressView: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(
-                "동영상 장면 분석\(model.isIndexing ? " 중" : "") \(model.progress.videoScenesDone) / \(model.progress.videoTotal)",
-                systemImage: "film"
-            )
-            ProgressView(value: model.progress.sceneFraction)
-            Text(Self.footnote)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    #if os(iOS)
-    private static let footnote = "동영상은 지금도 검색되고, 장면 분석이 끝나면 \"하품\" 같은 순간까지 찾아요. 충전 중이고 네트워크에 연결되어 있으면 백그라운드에서 이어서 분석해요."
-    #else
-    private static let footnote = "동영상은 지금도 검색되고, 장면 분석이 끝나면 \"하품\" 같은 순간까지 찾아요."
-    #endif
-}
-
-private struct IndexSummaryRow: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if !model.isEngineReady {
-                Label("검색 모델을 불러오는 중…", systemImage: "cpu")
-            } else if model.isIndexing && !model.progress.isQuickPassComplete {
-                Label("사진 분석 중 \(model.progress.indexed) / \(model.progress.total)", systemImage: "sparkles")
-                ProgressView(value: model.progress.fraction)
-                Text("분석이 끝난 사진부터 바로 검색할 수 있어요.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
-                Label("사진·동영상 \(model.indexedAssetCount)개 검색 가능", systemImage: "checkmark.circle")
-                if model.progress.remainingSubjects > 0 {
-                    Label(
-                        "인물·반려동물 분석\(model.isIndexing ? " 중" : "") \(model.progress.subjectsDone) / \(model.progress.subjectTotal)",
-                        systemImage: "person.crop.rectangle.stack"
-                    )
-                    ProgressView(value: model.progress.subjectFraction)
-                }
-                if model.progress.remainingVideoScenes > 0 {
-                    VideoSceneProgressView()
-                }
-            }
         }
     }
 }

@@ -27,8 +27,18 @@ struct AssetDetailView: View {
     }
 
     private var title: String {
-        item.asset.creationDate?.formatted(date: .abbreviated, time: .shortened) ?? ""
+        guard let date = item.asset.creationDate else { return "" }
+        let day = Self.dayFormatter.string(from: date)
+        let time = date.formatted(date: .omitted, time: .shortened)
+        return "\(day) \(time)"
     }
+
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy.MM.dd"
+        return formatter
+    }()
 }
 
 private struct PhotoDetailView: View {

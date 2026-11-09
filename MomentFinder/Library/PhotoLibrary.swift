@@ -101,11 +101,14 @@ enum PhotoLibrary {
     }
 
     /// 검색에 걸린 장면을 썸네일로 보여주기 위해 해당 시각의 프레임을 뽑습니다. 기기에 있는 동영상만 사용합니다.
+    /// seconds 는 분석 때 실제로 디코딩된 프레임 시각이라, 허용 오차 없이 요청해야 근처 키프레임이 아닌 그 장면이 나옵니다.
     static func videoFrame(for asset: PHAsset, at seconds: Double, side: CGFloat) async -> PlatformImage? {
         guard seconds > 0, let video = await videoAsset(for: asset, allowNetwork: false) else { return nil }
         let generator = AVAssetImageGenerator(asset: video)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: side, height: side)
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
         guard let (cgImage, _) = try? await generator.image(at: CMTime(seconds: seconds, preferredTimescale: 600)) else { return nil }
         #if canImport(UIKit)
         return UIImage(cgImage: cgImage)

@@ -35,7 +35,7 @@ struct AssetThumbnail: View {
                 }
             }
             .contentShape(Rectangle())
-            .task(id: item.id) {
+            .task(id: "\(item.id)@\(item.hit.time)") {
                 if item.hit.kind == .video, let frame = await PhotoLibrary.videoFrame(for: item.asset, at: item.hit.time, side: 300) {
                     image = frame
                 } else {

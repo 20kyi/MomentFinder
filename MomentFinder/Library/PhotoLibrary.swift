@@ -87,10 +87,14 @@ enum PhotoLibrary {
         }
     }
 
-    static func videoAsset(for asset: PHAsset, allowNetwork: Bool) async -> AVAsset? {
+    static func videoAsset(
+        for asset: PHAsset,
+        allowNetwork: Bool,
+        deliveryMode: PHVideoRequestOptionsDeliveryMode = .fastFormat
+    ) async -> AVAsset? {
         let options = PHVideoRequestOptions()
         options.isNetworkAccessAllowed = allowNetwork
-        options.deliveryMode = .fastFormat
+        options.deliveryMode = deliveryMode
         options.version = .current
 
         return await withCheckedContinuation { continuation in

@@ -96,6 +96,12 @@ struct AssetDetailView: View {
                 #if os(iOS)
                 Spacer()
                 #endif
+                if let currentPlayback {
+                    ClipMenu(playback: currentPlayback)
+                    #if os(iOS)
+                    Spacer()
+                    #endif
+                }
                 Button("삭제", systemImage: "trash", role: .destructive) {
                     Task { await model.delete([item]) }
                 }
@@ -279,9 +285,13 @@ private struct PhotoDetailView: View {
 /// 동영상 한 개의 재생 상태. 화면은 페이지 안에서 그리고, 컨트롤은 썸네일 줄 위에서 같은 상태를 씁니다.
 @MainActor @Observable
 private final class VideoPlayback {
-    let assetID: String
+    enum ClipState { case idle, saving, saved }
+
+    let asset: PHAsset
+    var assetID: String { asset.localIdentifier }
     /// 검색어와 가장 잘 맞는 장면. 1초 전부터 재생합니다.
     let momentTime: Double
+    var clipState = ClipState.idle
     var player: AVPlayer?
     /// 옆 페이지로 미리 불러온 동영상은 불러온 뒤에도 재생하지 않습니다.
     var playsWhenReady = false
@@ -292,8 +302,8 @@ private final class VideoPlayback {
     var duration: Double = 0
     var frames: [PlatformImage] = []
 
-    init(assetID: String, momentTime: Double) {
-        self.assetID = assetID
+    init(asset: PHAsset, momentTime: Double) {
+        self.asset = asset
         self.momentTime = momentTime
     }
 
@@ -359,7 +369,7 @@ private struct VideoMomentView: View {
         self.isActive = isActive
         self.onTap = onTap
         _activePlayback = activePlayback
-        _playback = State(initialValue: VideoPlayback(assetID: asset.localIdentifier, momentTime: momentTime))
+        _playback = State(initialValue: VideoPlayback(asset: asset, momentTime: momentTime))
     }
 
     var body: some View {
@@ -460,6 +470,48 @@ private struct VideoControls: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
+    }
+}
+
+/// 찾은 장면을 가운데에 두고 고른 길이만큼 잘라 저장하는 메뉴. 동영상보다 짧은 길이만 고를 수 있습니다.
+private struct ClipMenu: View {
+    let playback: VideoPlayback
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let lengths = VideoClip.lengths.filter { $0 < playback.duration }
+        Menu {
+            Section("찾은 장면을 가운데에 두고 ‘\(VideoClip.albumTitle)’ 앨범에 저장") {
+                ForEach(lengths, id: \.self) { length in
+                    Button("\(Int(length))초") { saveClip(length: length) }
+                        .accessibilityIdentifier("clip-length-\(Int(length))")
+                }
+            }
+        } label: {
+            switch playback.clipState {
+            case .idle: Label("클립 저장", systemImage: "scissors")
+            case .saving: ProgressView().accessibilityLabel("클립 저장 중")
+            case .saved: Label("클립 저장됨", systemImage: "checkmark")
+            }
+        }
+        .disabled(lengths.isEmpty || playback.clipState == .saving)
+        .accessibilityIdentifier("clip-menu")
+    }
+
+    private func saveClip(length: Double) {
+        let range = VideoClip.range(around: playback.momentTime, length: length, duration: playback.duration)
+        playback.clipState = .saving
+        Task {
+            do {
+                try await VideoClip.save(from: playback.asset, range: range)
+                playback.clipState = .saved
+                try? await Task.sleep(for: .seconds(2))
+                if playback.clipState == .saved { playback.clipState = .idle }
+            } catch {
+                playback.clipState = .idle
+                model.errorMessage = "클립을 저장하지 못했어요. \(error.localizedDescription)"
+            }
+        }
     }
 }
 

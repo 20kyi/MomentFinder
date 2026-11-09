@@ -30,6 +30,16 @@ final class SearchFlowUITests: XCTestCase {
         attachScreenshot("3-video-moment")
         let seconds = try XCTUnwrap(Self.seconds(in: moment.label), moment.label)
         XCTAssertGreaterThanOrEqual(seconds, 5, "고양이 장면(5초 이후)이 아닌 \(moment.label) 을 찾았습니다")
+
+        // 저장하면 보관함에 동영상이 늘어 다른 테스트 결과가 바뀌므로 메뉴만 열어 보고 닫습니다.
+        let clipMenu = app.buttons["clip-menu"]
+        XCTAssertTrue(clipMenu.waitForExistence(timeout: 10), "클립 저장 버튼이 없습니다")
+        XCTAssertTrue(clipMenu.isHittable, "클립 저장 버튼이 화면 밖에 있습니다")
+        clipMenu.tap()
+        XCTAssertTrue(app.buttons["clip-length-3"].waitForExistence(timeout: 5), "클립 길이 메뉴가 열리지 않았습니다")
+        XCTAssertFalse(app.buttons["clip-length-15"].exists, "동영상보다 긴 클립 길이가 보입니다")
+        attachScreenshot("19-clip-menu")
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
     }
 
     /// 보관함에 생일 케이크 사진이 없으므로 엉뚱한 사진 대신 "없음" 화면을 보여주고, 원하면 비슷한 사진을 볼 수 있어야 합니다.

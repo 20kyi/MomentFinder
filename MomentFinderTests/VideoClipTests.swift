@@ -1,7 +1,6 @@
 import AVFoundation
 import CoreVideo
 import Foundation
-import Photos
 import Testing
 @testable import MomentFinder
 
@@ -31,45 +30,6 @@ struct VideoClipTests {
 
         let duration = try await AVURLAsset(url: clip).load(.duration).seconds
         #expect(abs(duration - 2) < 0.1)
-    }
-
-    @Test func TEMP_savesClipIntoAlbum() async throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let source = folder.appendingPathComponent("source.mov")
-        try await writeTestVideo(to: source, seconds: 10)
-        #expect(await PhotoLibrary.requestAuthorization() == .authorized)
-        var id: String?
-        try await PHPhotoLibrary.shared().performChanges {
-            let request = PHAssetCreationRequest.forAsset()
-            request.addResource(with: .video, fileURL: source, options: nil)
-            id = request.placeholderForCreatedAsset?.localIdentifier
-        }
-        let createdID = try #require(id)
-        let original = try #require(PHAsset.fetchAssets(withLocalIdentifiers: [createdID], options: nil).firstObject)
-
-        let clock = ContinuousClock()
-        var mark = clock.now
-        func lap(_ name: String) { print("TEMP \(name):", clock.now - mark); mark = clock.now }
-        let video = await PhotoLibrary.videoAsset(for: original, allowNetwork: true, deliveryMode: .highQualityFormat)
-        lap("request")
-        try await VideoClip.export(try #require(video), range: 1...4, to: folder.appendingPathComponent("a.mov"))
-        lap("export")
-        try await VideoClip.save(from: original, range: VideoClip.range(around: 6, length: 3, duration: 10))
-        lap("save1")
-        try await VideoClip.save(from: original, range: VideoClip.range(around: 9, length: 5, duration: 10))
-        lap("save2")
-
-        let options = PHFetchOptions()
-        options.predicate = NSPredicate(format: "title == %@", VideoClip.albumTitle)
-        let albums = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: options)
-        #expect(albums.count == 1)
-        let clips = PHAsset.fetchAssets(in: try #require(albums.firstObject), options: nil)
-        var durations: [Double] = []
-        clips.enumerateObjects { asset, _, _ in durations.append(asset.duration) }
-        print("TEMP clips:", durations)
-        #expect(durations.count == 2)
-        #expect(durations.contains { abs($0 - 3) < 0.1 } && durations.contains { abs($0 - 5) < 0.1 })
     }
 
     /// 30fps 로 매 프레임 밝기가 바뀌는 작은 동영상을 만듭니다.

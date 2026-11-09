@@ -181,14 +181,17 @@ enum PhotoLibrary {
 
     /// 공유용으로 원본(편집했다면 편집본)을 임시 폴더에 내려받습니다. iCloud 에만 있으면 내려받습니다.
     /// 공유 시트는 넘겨받은 파일을 자기 쪽으로 복사하므로, 다음 공유 때 이전에 내보낸 파일을 지워 원본이 쌓이지 않게 합니다.
-    static func exportOriginal(of asset: PHAsset) async throws -> URL {
+    /// 여러 장을 한 번에 공유하면 내보내기가 겹쳐 일어나므로, 같은 session 으로 내보낸 파일은 남겨 둡니다.
+    static func exportOriginal(of asset: PHAsset, session: UUID) async throws -> URL {
         let resources = PHAssetResource.assetResources(for: asset)
         let preferred: [PHAssetResourceType] = asset.mediaType == .video ? [.fullSizeVideo, .video] : [.fullSizePhoto, .photo]
         guard let resource = preferred.lazy.compactMap({ type in resources.first { $0.type == type } }).first ?? resources.first else {
             throw CocoaError(.fileNoSuchFile)
         }
-        removeSharedExports()
-        let folder = shareFolder.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        removeSharedExports(except: session)
+        let folder = shareFolder
+            .appendingPathComponent(session.uuidString, isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent(resource.originalFilename)
 
@@ -200,6 +203,13 @@ enum PhotoLibrary {
 
     static func removeSharedExports() {
         try? FileManager.default.removeItem(at: shareFolder)
+    }
+
+    private static func removeSharedExports(except session: UUID) {
+        let folders = (try? FileManager.default.contentsOfDirectory(at: shareFolder, includingPropertiesForKeys: nil)) ?? []
+        for folder in folders where folder.lastPathComponent != session.uuidString {
+            try? FileManager.default.removeItem(at: folder)
+        }
     }
 }
 

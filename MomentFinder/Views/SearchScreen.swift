@@ -7,6 +7,10 @@ struct SearchScreen: View {
     @State private var showsIndexStatus = false
     @State private var isSearchPresented = false
     @State private var scrollPosition = ScrollPosition(edge: .top)
+    @State private var isSelecting = false
+    /// 편집 앱에 넘길 순서가 되므로 누른 순서를 지킵니다.
+    /// 여러 검색어로 찾은 장면을 모아 넘길 수 있도록 검색을 바꿔도 비우지 않습니다.
+    @State private var selectedItems: [ResultItem] = []
 
     /// 종류 탭과 이름 칩은 검색 결과를 거르는 필터라서 검색 중일 때만 보여줍니다.
     /// 시스템 searchScopes 는 검색창이 활성일 때만 보여서, 추천 검색어로 검색하거나 상세 화면에서 돌아오면 사라집니다.
@@ -17,13 +21,21 @@ struct SearchScreen: View {
     var body: some View {
         NavigationStack {
             content
+                // 검색창이 열려 있으면 내비게이션 바가 숨으므로, 선택 중 버튼은 항상 보이는 이 바에 둡니다.
                 .topBar {
-                    if showsFilters {
-                        SearchFilterBar()
-                            .transition(.move(edge: .top).combined(with: .opacity))
+                    VStack(spacing: 0) {
+                        if isSelecting {
+                            SelectionBar(items: selectedItems, onCancel: endSelection)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                        if showsFilters {
+                            SearchFilterBar()
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                     }
                 }
                 .animation(.default, value: showsFilters)
+                .animation(.default, value: isSelecting)
                 .navigationTitle("Moment Finder")
                 #if os(iOS)
                 .toolbarTitleDisplayMode(showsFilters ? .inline : .inlineLarge)
@@ -46,6 +58,8 @@ struct SearchScreen: View {
                         Button { showsIndexStatus = true } label: { IndexStatusBadge() }
                     }
                 }
+                .onChange(of: model.libraryRevision) { selectedItems = ResultItem.refetched(selectedItems) }
+                .sensoryFeedback(.selection, trigger: selectedItems.count)
                 .sheet(isPresented: $showsIndexStatus) { IndexStatusView() }
                 .navigationDestination(item: $selection) { AssetDetailView(item: $0, in: model.results) }
         }
@@ -71,31 +85,55 @@ struct SearchScreen: View {
 
     private var resultsGrid: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
-                if let interpreted = model.interpretedQuery {
-                    Text("“\(interpreted)” 로 검색한 결과")
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let interpreted = model.interpretedQuery {
+                        Text("“\(interpreted)” 로 검색한 결과")
+                    }
+                    if model.isIndexing && !model.progress.isQuickPassComplete {
+                        Label("분석하는 대로 결과가 추가돼요 · \(model.progress.indexed) / \(model.progress.total)", systemImage: "sparkles")
+                    } else if model.isIndexing && model.progress.remainingVideoScenes > 0 {
+                        Label("동영상 장면을 분석하는 대로 결과가 정확해져요 · \(model.progress.videoScenesDone) / \(model.progress.videoTotal)", systemImage: "film")
+                    }
+                    if model.showsWeakMatches {
+                        Label("관련도가 낮은 사진도 함께 보여주고 있어요", systemImage: "line.3.horizontal.decrease.circle")
+                    }
                 }
-                if model.isIndexing && !model.progress.isQuickPassComplete {
-                    Label("분석하는 대로 결과가 추가돼요 · \(model.progress.indexed) / \(model.progress.total)", systemImage: "sparkles")
-                } else if model.isIndexing && model.progress.remainingVideoScenes > 0 {
-                    Label("동영상 장면을 분석하는 대로 결과가 정확해져요 · \(model.progress.videoScenesDone) / \(model.progress.videoTotal)", systemImage: "film")
-                }
-                if model.showsWeakMatches {
-                    Label("관련도가 낮은 사진도 함께 보여주고 있어요", systemImage: "line.3.horizontal.decrease.circle")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if !isSelecting {
+                    Button("선택") { beginSelection() }
+                        .font(.subheadline.weight(.semibold))
+                        .accessibilityIdentifier("select-button")
                 }
             }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal)
             .padding(.top, 4)
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 2)], spacing: 2) {
                 ForEach(model.results) { item in
-                    Button { selection = item } label: { AssetThumbnail(item: item) }
-                        .buttonStyle(.plain)
-                        .contextMenu { AssetContextMenu(item: item) }
-                        .accessibilityIdentifier(item.hit.kind == .video ? "result-video" : "result-photo")
+                    let order = selectedItems.firstIndex { $0.id == item.id }
+                    Button {
+                        if isSelecting { toggleSelection(item) } else { selection = item }
+                    } label: {
+                        AssetThumbnail(item: item)
+                            .overlay {
+                                if order != nil {
+                                    Rectangle().strokeBorder(Color.accentColor, lineWidth: 3)
+                                }
+                            }
+                            .overlay(alignment: .topTrailing) {
+                                if isSelecting { SelectionBadge(order: order.map { $0 + 1 }) }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        AssetContextMenu(item: item, onSelect: isSelecting ? nil : { beginSelection(with: item) })
+                    }
+                    .accessibilityIdentifier(item.hit.kind == .video ? "result-video" : "result-photo")
+                    .accessibilityAddTraits(order != nil ? .isSelected : [])
                 }
             }
             .animation(.default, value: model.results.map(\.id))
@@ -168,6 +206,8 @@ struct SearchScreen: View {
             query = ""
             model.selectedNames = []
             model.scope = .all
+            isSelecting = false
+            selectedItems = []
         }
     }
 
@@ -175,6 +215,75 @@ struct SearchScreen: View {
         let text = query
         scrollPosition.scrollTo(edge: .top)
         Task { await model.search(text) }
+    }
+
+    private func beginSelection(with item: ResultItem? = nil) {
+        withAnimation {
+            isSelecting = true
+            if let item { selectedItems = [item] }
+        }
+    }
+
+    private func toggleSelection(_ item: ResultItem) {
+        if let index = selectedItems.firstIndex(where: { $0.id == item.id }) {
+            selectedItems.remove(at: index)
+        } else {
+            selectedItems.append(item)
+        }
+    }
+
+    private func endSelection() {
+        withAnimation {
+            isSelecting = false
+            selectedItems = []
+        }
+    }
+}
+
+/// 선택 모드에서 필터 바 위에 붙는 줄. 고른 개수와 공유 버튼을 보여줍니다.
+private struct SelectionBar: View {
+    let items: [ResultItem]
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack {
+            Button("취소", action: onCancel)
+                .accessibilityIdentifier("cancel-selection-button")
+            Spacer()
+            Text(items.isEmpty ? "공유할 사진을 골라 주세요" : "\(items.count)개 선택됨")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(items.isEmpty ? .secondary : .primary)
+                .accessibilityIdentifier("selection-count")
+            Spacer()
+            MultiAssetShareLink(items: items)
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+    }
+}
+
+/// 선택 모드에서 썸네일 위에 띄우는 동그라미. 고른 항목에는 고른 순서를 적습니다.
+private struct SelectionBadge: View {
+    let order: Int?
+
+    var body: some View {
+        ZStack {
+            if let order {
+                Circle().fill(Color.accentColor)
+                Text(order, format: .number)
+                    .font(.caption.weight(.bold).monospacedDigit())
+                    .minimumScaleFactor(0.6)
+                    .foregroundStyle(.white)
+            } else {
+                Circle().fill(.black.opacity(0.2))
+            }
+            Circle().strokeBorder(.white, lineWidth: 1.5)
+        }
+        .frame(width: 24, height: 24)
+        .shadow(radius: 1)
+        .padding(5)
     }
 }
 

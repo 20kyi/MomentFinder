@@ -180,6 +180,43 @@ final class SearchFlowUITests: XCTestCase {
         XCTAssertTrue(favorite.exists, "삭제를 취소했는데 상세 화면이 닫혔습니다")
     }
 
+    /// 결과를 여러 개 골라 한 번에 공유 시트로 넘길 수 있어야 합니다. 고른 순서가 편집 앱에 넘어갈 순서입니다.
+    func testSelectsMultipleResultsAndShares() throws {
+        app.launch()
+        grantPhotoAccessIfNeeded()
+
+        let ready = app.staticTexts.containing(NSPredicate(format: "label CONTAINS '검색 가능'")).firstMatch
+        XCTAssertTrue(ready.waitForExistence(timeout: 180), "인덱싱이 끝나지 않았습니다")
+
+        search("two cats sleeping on a couch")
+        let results = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'result-'"))
+        XCTAssertTrue(results.firstMatch.waitForExistence(timeout: 30))
+        guard waitUntil(timeout: 10, { results.count >= 2 }) else { throw XCTSkip("결과가 2개 미만입니다") }
+
+        app.buttons["select-button"].tap()
+        let share = app.buttons["share-selection-button"]
+        XCTAssertTrue(share.waitForExistence(timeout: 5))
+        XCTAssertFalse(share.isEnabled, "아무것도 고르지 않았는데 공유할 수 있습니다")
+
+        results.element(boundBy: 1).tap()
+        results.element(boundBy: 0).tap()
+        XCTAssertTrue(waitUntil { results.element(boundBy: 0).isSelected && results.element(boundBy: 1).isSelected })
+        XCTAssertEqual(app.staticTexts["selection-count"].label, "2개 선택됨")
+        XCTAssertFalse(app.buttons["moment-button"].exists, "선택 모드에서 상세 화면이 열렸습니다")
+        attachScreenshot("17-multi-select")
+
+        share.tap()
+        let shareSheet = app.otherElements["ActivityListView"]
+        XCTAssertTrue(shareSheet.waitForExistence(timeout: 10), "공유 시트가 열리지 않았습니다")
+        attachScreenshot("18-multi-share-sheet")
+        let close = shareSheet.buttons["Close"].exists ? shareSheet.buttons["Close"] : shareSheet.buttons["닫기"]
+        if close.exists { close.tap() } else { app.swipeDown() }
+        XCTAssertTrue(waitUntil(timeout: 5) { !shareSheet.exists })
+
+        app.buttons["cancel-selection-button"].tap()
+        XCTAssertTrue(waitUntil { !results.element(boundBy: 0).isSelected }, "선택을 취소해도 선택이 남아 있습니다")
+    }
+
     /// 인물 분석이 끝나면 인물 화면에서 그룹을 보고 이름을 붙인 뒤, 그 이름이 검색 칩으로 나타나야 합니다.
     func testNamesSubjectGroupAndFiltersByChip() throws {
         app.launch()

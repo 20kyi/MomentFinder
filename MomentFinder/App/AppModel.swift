@@ -364,10 +364,6 @@ final class AppModel {
         await clusterer?.members(of: clusterID) ?? []
     }
 
-    func subjects(inAsset assetID: String) async -> [(subject: StoredSubject, name: String?)] {
-        await clusterer?.subjects(inAsset: assetID) ?? []
-    }
-
     /// 같은 이름의 그룹이 있으면 합쳐지므로, 화면이 따라갈 수 있게 남은 그룹 ID 를 돌려줍니다.
     @discardableResult
     func renameGroup(_ clusterID: Int64, to name: String) async -> Int64 {
@@ -390,19 +386,6 @@ final class AppModel {
             errorMessage = error.localizedDescription
         }
         await peopleDidChange()
-    }
-
-    @discardableResult
-    func nameSubject(_ subjectID: Int64, as name: String) async -> Int64? {
-        guard let clusterer else { return nil }
-        do {
-            let id = try await clusterer.name(subject: subjectID, as: name)
-            await peopleDidChange()
-            return id
-        } catch {
-            errorMessage = error.localizedDescription
-            return nil
-        }
     }
 
     func refreshGroups() async {

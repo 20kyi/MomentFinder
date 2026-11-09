@@ -117,6 +117,26 @@ enum PhotoLibrary {
         #endif
     }
 
+    /// 사진 앱의 재생바처럼 동영상 전체에서 고르게 뽑은 작은 장면들.
+    static func filmstrip(for asset: PHAsset, count: Int, side: CGFloat) async -> [PlatformImage] {
+        guard count > 0, let video = await videoAsset(for: asset, allowNetwork: true),
+              let duration = try? await video.load(.duration).seconds, duration > 0 else { return [] }
+        let generator = AVAssetImageGenerator(asset: video)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: side, height: side)
+        var frames: [PlatformImage] = []
+        for index in 0..<count {
+            let time = CMTime(seconds: duration * (Double(index) + 0.5) / Double(count), preferredTimescale: 600)
+            guard !Task.isCancelled, let (cgImage, _) = try? await generator.image(at: time) else { continue }
+            #if canImport(UIKit)
+            frames.append(UIImage(cgImage: cgImage))
+            #else
+            frames.append(NSImage(cgImage: cgImage, size: .zero))
+            #endif
+        }
+        return frames
+    }
+
     static func playerItem(for asset: PHAsset) async -> AVPlayerItem? {
         let options = PHVideoRequestOptions()
         options.isNetworkAccessAllowed = true
@@ -128,6 +148,7 @@ enum PhotoLibrary {
             }
         }
     }
+
     // MARK: - Editing
 
     /// Photos 앱의 즐겨찾기와 같은 값을 바꿉니다.

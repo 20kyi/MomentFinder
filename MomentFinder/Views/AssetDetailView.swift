@@ -8,8 +8,15 @@ struct AssetDetailView: View {
     @State private var items: [ResultItem]
     @State private var currentID: String?
     @State private var width: CGFloat = 0
+    /// 사진 앱처럼 화면을 탭하면 위아래 UI를 숨기고 배경을 검게 바꿉니다.
+    @State private var chromeHidden = false
+    /// 마지막으로 화면에 보인 동영상의 재생 상태. 지금 결과가 그 동영상일 때만 컨트롤을 띄웁니다.
+    @State private var activePlayback: VideoPlayback?
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+
+    private var hidesChrome: Bool { chromeHidden && !voiceOverEnabled }
 
     init(item: ResultItem, in items: [ResultItem] = []) {
         _items = State(initialValue: items.contains { $0.id == item.id } ? items : [item])
@@ -18,6 +25,12 @@ struct AssetDetailView: View {
 
     private var item: ResultItem {
         items.first { $0.id == currentID } ?? items[0]
+    }
+
+    private var currentPlayback: VideoPlayback? {
+        guard item.hit.kind == .video, let activePlayback, activePlayback.assetID == item.id,
+              activePlayback.player != nil else { return nil }
+        return activePlayback
     }
 
     var body: some View {
@@ -41,18 +54,30 @@ struct AssetDetailView: View {
                 if let currentID { proxy.scrollTo(currentID) }
             }
         }
+        // 위아래 UI를 보이거나 숨겨도 사진·동영상의 크기와 위치가 그대로이도록 항상 전체 화면 기준으로 배치하고, UI 는 그 위에 겹칩니다.
+        .ignoresSafeArea()
+        .background {
+            if hidesChrome { Color.black.ignoresSafeArea() }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                SubjectsInAssetRow(assetID: item.id)
-                if items.count > 1 {
-                    ResultStrip(items: items, currentID: $currentID)
+            if !hidesChrome {
+                VStack(spacing: 0) {
+                    if let currentPlayback {
+                        VideoControls(playback: currentPlayback)
+                            .transition(.opacity)
+                    }
+                    if items.count > 1 {
+                        ResultStrip(items: items, currentID: $currentID)
+                    }
                 }
+                .animation(.easeInOut(duration: 0.2), value: currentPlayback == nil)
             }
-            .background(.bar)
         }
         .navigationTitle(title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(hidesChrome ? .hidden : .automatic, for: .navigationBar, .bottomBar)
+        .statusBarHidden(hidesChrome)
         #endif
         .toolbar {
             if let score = item.hit.score {
@@ -105,11 +130,13 @@ struct AssetDetailView: View {
     @ViewBuilder
     private func page(_ item: ResultItem) -> some View {
         let isActive = item.id == currentID
+        let toggleChrome = { withAnimation(.easeInOut(duration: 0.2)) { chromeHidden.toggle() } }
         Group {
             if item.hit.kind == .video {
-                VideoMomentView(asset: item.asset, momentTime: item.hit.time, isActive: isActive)
+                VideoMomentView(asset: item.asset, momentTime: item.hit.time, isActive: isActive,
+                                onTap: toggleChrome, activePlayback: $activePlayback)
             } else {
-                PhotoDetailView(asset: item.asset)
+                PhotoDetailView(asset: item.asset, onTap: toggleChrome)
             }
         }
         .accessibilityHidden(!isActive)
@@ -141,15 +168,15 @@ private struct ResultStrip: View {
     @State private var scrollX: CGFloat = 0
 
     /// 가운데 항목을 위치로 계산하므로 모든 칸의 너비가 같아야 합니다.
-    /// 선택된 썸네일은 칸보다 넓게 그리고, 양옆은 offset 으로만 밀어내 배치는 그대로 둡니다.
-    private static let cellWidth: CGFloat = 36
+    /// 선택된 썸네일은 칸보다 크게 그리고, 양옆은 offset 으로만 밀어내 배치는 그대로 둡니다.
+    private static let cellWidth: CGFloat = 32
     private static let spacing: CGFloat = 2
     private static let step = cellWidth + spacing
-    private static let height: CGFloat = 52
+    private static let height: CGFloat = 38
 
     var body: some View {
         let selectedIndex = items.firstIndex { $0.id == currentID }
-        let push = selectedIndex.map { (selectedWidth(items[$0]) - Self.cellWidth) / 2 + 3 } ?? 0
+        let push = selectedIndex == nil ? 0 : (Self.height - Self.cellWidth) / 2 + 3
         let pin = selectedIndex.map { scrollX - CGFloat($0) * Self.step } ?? 0
 
         ScrollViewReader { proxy in
@@ -193,8 +220,9 @@ private struct ResultStrip: View {
         return Button {
             withAnimation { currentID = item.id }
         } label: {
+            let side = selected ? Self.height : Self.cellWidth
             AssetThumbnail(item: item, compact: true)
-                .frame(width: selected ? selectedWidth(item) : Self.cellWidth, height: selected ? Self.height : Self.height - 6)
+                .frame(width: side, height: side)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .overlay {
                     if selected {
@@ -209,223 +237,343 @@ private struct ResultStrip: View {
         .accessibilityIdentifier("detail-strip-item")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
-
-    /// 선택된 썸네일은 잘리지 않도록 원본 비율대로 넓힙니다. 아주 긴 파노라마는 적당히 자릅니다.
-    private func selectedWidth(_ item: ResultItem) -> CGFloat {
-        let asset = item.asset
-        guard asset.pixelWidth > 0, asset.pixelHeight > 0 else { return Self.cellWidth }
-        let ratio = CGFloat(asset.pixelWidth) / CGFloat(asset.pixelHeight)
-        return min(max(Self.height * ratio, Self.cellWidth), Self.height * 2)
-    }
 }
 
-/// 사진 속에서 찾은 인물·반려동물. 이름 있는 그룹은 눌러서 모아 보고, 이름이 없거나 잘못된 경우 이름을 붙입니다.
-private struct SubjectsInAssetRow: View {
-    let assetID: String
-    @Environment(AppModel.self) private var model
-    @State private var entries: [(subject: StoredSubject, name: String?)] = []
-    @State private var naming: StoredSubject?
-    @State private var openedGroup: Int64?
-
-    var body: some View {
-        Group {
-            if !entries.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("이 사진 속 인물")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 14) {
-                            ForEach(entries, id: \.subject.id) { entry in
-                                chip(entry.subject, name: entry.name)
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-            }
-        }
-        .task(id: assetID) { await reload() }
-        .onChange(of: model.groups) { Task { await reload() } }
-        .sheet(item: $naming) { subject in
-            NameSubjectSheet(subject: subject, currentName: entries.first { $0.subject.id == subject.id }?.name)
-        }
-        .navigationDestination(item: $openedGroup) { PersonDetailView(clusterID: $0) }
-    }
-
-    private func reload() async {
-        let found = await model.subjects(inAsset: assetID)
-        guard !Task.isCancelled else { return }
-        entries = found
-    }
-
-    private func chip(_ subject: StoredSubject, name: String?) -> some View {
-        Button {
-            if name != nil, let clusterID = subject.clusterID {
-                openedGroup = clusterID
-            } else {
-                naming = subject
-            }
-        } label: {
-            VStack(spacing: 4) {
-                SubjectThumbnail(subject: subject, size: 44)
-                Text(name ?? "이름 없음")
-                    .font(.caption2)
-                    .foregroundStyle(name == nil ? .secondary : .primary)
-                    .lineLimit(1)
-            }
-            .frame(width: 60)
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button("이름 바꾸기", systemImage: "pencil") { naming = subject }
-        }
-        .accessibilityIdentifier("subject-chip")
-    }
-}
-
-private struct NameSubjectSheet: View {
-    let subject: StoredSubject
-    let currentName: String?
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    @State private var name = ""
-
-    private var suggestions: [String] {
-        Array(Set(model.groups.filter { $0.species == subject.species }.compactMap(\.name))).sorted()
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    HStack {
-                        Spacer()
-                        SubjectThumbnail(subject: subject, size: 96)
-                        Spacer()
-                    }
-                    .listRowBackground(Color.clear)
-                }
-                Section {
-                    TextField("이름", text: $name)
-                        .submitLabel(.done)
-                        .onSubmit { save(name) }
-                } footer: {
-                    Text(currentName == nil
-                         ? "이 그룹의 모든 사진에 이름이 붙어요. 이미 있는 이름이면 한 그룹으로 합쳐져요."
-                         : "이 사진만 다른 이름의 그룹으로 옮겨요.")
-                }
-                if !suggestions.isEmpty {
-                    Section("이미 있는 이름") {
-                        ForEach(suggestions, id: \.self) { suggestion in
-                            Button(suggestion) { save(suggestion) }
-                        }
-                    }
-                }
-            }
-            .formStyle(.grouped)
-            .navigationTitle(subject.species == .person ? "누구예요?" : "이름이 뭐예요?")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("취소") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("저장") { save(name) }
-                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            }
-            .onAppear { name = currentName ?? "" }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private func save(_ value: String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != currentName else { dismiss(); return }
-        Task {
-            await model.nameSubject(subject.id, as: trimmed)
-            dismiss()
-        }
-    }
+/// 사진·동영상을 그릴 크기. 화면보다 세로로 긴 것은 양옆에 여백이 생기지 않도록 너비를 꽉 채우고 위아래를 잘라냅니다.
+/// 화면보다 가로로 긴 것은 잘리지 않게 원본 비율 그대로 너비에 맞춥니다.
+private func mediaFrame(for asset: PHAsset, in container: CGSize) -> CGSize {
+    guard asset.pixelWidth > 0, asset.pixelHeight > 0 else { return container }
+    let ratio = CGFloat(asset.pixelWidth) / CGFloat(asset.pixelHeight)
+    return CGSize(width: container.width, height: min(container.height, container.width / ratio))
 }
 
 private struct PhotoDetailView: View {
     let asset: PHAsset
+    let onTap: () -> Void
     @State private var image: PlatformImage?
+    @State private var containerSize: CGSize = .zero
 
     var body: some View {
         ZStack {
             if let image {
+                let frame = mediaFrame(for: asset, in: containerSize)
                 Image(platformImage: image)
                     .resizable()
-                    .scaledToFit()
+                    .scaledToFill()
+                    .frame(width: frame.width, height: frame.height)
+                    .clipped()
             } else {
                 ProgressView()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { containerSize = $0 }
         .task(id: asset.localIdentifier) {
             image = await PhotoLibrary.image(for: asset, side: 2048, allowNetwork: true)
         }
     }
 }
 
-/// 검색어와 가장 잘 맞는 장면 1초 전부터 재생합니다.
+/// 동영상 한 개의 재생 상태. 화면은 페이지 안에서 그리고, 컨트롤은 썸네일 줄 위에서 같은 상태를 씁니다.
+@MainActor @Observable
+private final class VideoPlayback {
+    let assetID: String
+    /// 검색어와 가장 잘 맞는 장면. 1초 전부터 재생합니다.
+    let momentTime: Double
+    var player: AVPlayer?
+    /// 옆 페이지로 미리 불러온 동영상은 불러온 뒤에도 재생하지 않습니다.
+    var playsWhenReady = false
+    var isPlaying = false
+    var isMuted = false
+    var isScrubbing = false
+    var currentTime: Double = 0
+    var duration: Double = 0
+    var frames: [PlatformImage] = []
+
+    init(assetID: String, momentTime: Double) {
+        self.assetID = assetID
+        self.momentTime = momentTime
+    }
+
+    func load(_ asset: PHAsset) async {
+        guard let item = await PhotoLibrary.playerItem(for: asset) else { return }
+        let player = AVPlayer(playerItem: item)
+        player.isMuted = isMuted
+        self.player = player
+        play(from: momentTime - 1, autoplay: playsWhenReady)
+        while !Task.isCancelled {
+            if !isScrubbing { currentTime = player.currentTime().seconds }
+            isPlaying = player.timeControlStatus != .paused
+            if item.duration.isNumeric { duration = item.duration.seconds }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
+
+    func play(from time: Double, autoplay: Bool = true) {
+        guard let player else { return }
+        let target = max(0, time)
+        currentTime = target
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+            if autoplay { player.play() }
+        }
+    }
+
+    func togglePlayback() {
+        guard let player else { return }
+        if isPlaying {
+            player.pause()
+            isPlaying = false
+        } else if duration > 0, currentTime >= duration - 0.1 {
+            play(from: 0)
+        } else {
+            player.play()
+            isPlaying = true
+        }
+    }
+
+    func seek(to time: Double) {
+        currentTime = time
+        player?.seek(to: CMTime(seconds: time, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    func toggleMute() {
+        isMuted.toggle()
+        player?.isMuted = isMuted
+    }
+}
+
+/// 동영상 화면만 그립니다. 재생 컨트롤은 썸네일 줄에 가리지 않도록 AssetDetailView 가 그 위에 따로 둡니다.
 private struct VideoMomentView: View {
     let asset: PHAsset
-    let momentTime: Double
-    /// 지금 화면에 보이는 페이지인지. 옆 페이지로 미리 불러온 동영상은 재생하지 않습니다.
+    /// 지금 화면에 보이는 페이지인지. 보이는 동안에만 재생하고 컨트롤에 자기 재생 상태를 넘깁니다.
     let isActive: Bool
-    @State private var player: AVPlayer?
-    @State private var playsWhenReady = false
+    let onTap: () -> Void
+    @Binding var activePlayback: VideoPlayback?
+    @State private var playback: VideoPlayback
+    @State private var containerSize: CGSize = .zero
+
+    init(asset: PHAsset, momentTime: Double, isActive: Bool, onTap: @escaping () -> Void, activePlayback: Binding<VideoPlayback?>) {
+        self.asset = asset
+        self.isActive = isActive
+        self.onTap = onTap
+        _activePlayback = activePlayback
+        _playback = State(initialValue: VideoPlayback(assetID: asset.localIdentifier, momentTime: momentTime))
+    }
 
     var body: some View {
-        VStack(spacing: 12) {
-            if let player {
-                VideoPlayer(player: player)
+        ZStack {
+            if let player = playback.player {
+                let frame = mediaFrame(for: asset, in: containerSize)
+                PlayerSurface(player: player)
+                    .frame(width: frame.width, height: frame.height)
+                    .clipped()
             } else {
                 ProgressView("동영상 불러오는 중…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            HStack {
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { containerSize = $0 }
+        .task(id: asset.localIdentifier) { await playback.load(asset) }
+        .task(id: asset.localIdentifier) {
+            playback.frames = await PhotoLibrary.filmstrip(for: asset, count: 10, side: 120)
+        }
+        .onChange(of: isActive, initial: true) {
+            playback.playsWhenReady = isActive
+            if isActive {
+                activePlayback = playback
+                playback.play(from: playback.momentTime - 1)
+            } else {
+                playback.player?.pause()
+            }
+        }
+        .onDisappear { playback.player?.pause() }
+    }
+}
+
+/// 사진 앱처럼 재생 버튼 · 장면 미리보기 재생바 · 소리 버튼을 유리 질감의 한 줄로 띄웁니다.
+private struct VideoControls: View {
+    let playback: VideoPlayback
+
+    private static let barHeight: CGFloat = 44
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Button {
-                    seek(to: momentTime)
+                    playback.play(from: playback.momentTime - 1)
                 } label: {
-                    Label("찾은 장면 \(TimeFormatter.string(momentTime))", systemImage: "scope")
+                    Label("찾은 장면 \(TimeFormatter.string(playback.momentTime))", systemImage: "scope")
                 }
-                .buttonStyle(.borderedProminent)
+                .glassButtonStyle(prominent: true)
                 .accessibilityIdentifier("moment-button")
                 Button {
-                    seek(to: 0)
+                    playback.play(from: 0)
                 } label: {
                     Label("처음부터", systemImage: "backward.end")
                 }
-                .buttonStyle(.bordered)
+                .glassButtonStyle(prominent: false)
             }
-            .padding(.bottom)
+            .buttonBorderShape(.capsule)
+
+            HStack(spacing: 8) {
+                Button {
+                    playback.togglePlayback()
+                } label: {
+                    Label(playback.isPlaying ? "일시정지" : "재생", systemImage: playback.isPlaying ? "pause.fill" : "play.fill")
+                        .frame(width: Self.barHeight, height: Self.barHeight)
+                        .contentShape(Circle())
+                }
+                .glassBackground(Circle())
+                .accessibilityIdentifier("play-pause-button")
+
+                Filmstrip(frames: playback.frames,
+                          progress: playback.duration > 0 ? playback.currentTime / playback.duration : 0,
+                          scrubTime: playback.isScrubbing ? playback.currentTime : nil) { fraction, ended in
+                    playback.isScrubbing = !ended
+                    playback.seek(to: fraction * playback.duration)
+                }
+                .padding(4)
+                .frame(height: Self.barHeight)
+                .glassBackground(Capsule())
+                .accessibilityRepresentation {
+                    Slider(value: Binding { playback.currentTime } set: { playback.seek(to: $0) },
+                           in: 0...max(playback.duration, 0.1)) { Text("재생 위치") }
+                }
+
+                Button {
+                    playback.toggleMute()
+                } label: {
+                    Label(playback.isMuted ? "소리 켜기" : "소리 끄기", systemImage: playback.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .frame(width: Self.barHeight, height: Self.barHeight)
+                        .contentShape(Circle())
+                }
+                .glassBackground(Circle())
+                .accessibilityIdentifier("mute-button")
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.plain)
+            .font(.body.weight(.semibold))
         }
-        .task(id: asset.localIdentifier) {
-            guard let item = await PhotoLibrary.playerItem(for: asset) else { return }
-            let player = AVPlayer(playerItem: item)
-            self.player = player
-            seek(to: momentTime, play: playsWhenReady)
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+    }
+}
+
+/// 동영상 장면들을 늘어놓고 흰 막대로 재생 위치를 보여주는 재생바. 끌면 그 위치로 이동합니다.
+private struct Filmstrip: View {
+    let frames: [PlatformImage]
+    let progress: Double
+    /// 끄는 동안에만 재생 위치 위에 시간을 띄웁니다.
+    let scrubTime: Double?
+    let onScrub: (_ fraction: Double, _ ended: Bool) -> Void
+
+    private static let playheadWidth: CGFloat = 4
+
+    var body: some View {
+        GeometryReader { geometry in
+            let size = geometry.size
+            HStack(spacing: 0) {
+                ForEach(frames.indices, id: \.self) { index in
+                    Image(platformImage: frames[index])
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: size.width / CGFloat(frames.count), height: size.height)
+                        .clipped()
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            .background(Color.secondary.opacity(0.2))
+            .clipShape(Capsule())
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(.white)
+                    .frame(width: Self.playheadWidth, height: size.height + 4)
+                    .shadow(color: .black.opacity(0.35), radius: 2)
+                    .overlay(alignment: .top) {
+                        if let scrubTime {
+                            Text(TimeFormatter.string(scrubTime))
+                                .font(.caption.monospacedDigit().weight(.semibold))
+                                .fixedSize()
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .glassBackground(Capsule())
+                                .offset(y: -34)
+                        }
+                    }
+                    .offset(x: min(max(progress, 0), 1) * (size.width - Self.playheadWidth))
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { onScrub(fraction(of: $0.location.x, in: size.width), false) }
+                    .onEnded { onScrub(fraction(of: $0.location.x, in: size.width), true) }
+            )
         }
-        .onChange(of: isActive, initial: true) {
-            playsWhenReady = isActive
-            if isActive { seek(to: momentTime) } else { player?.pause() }
-        }
-        .onDisappear { player?.pause() }
     }
 
-    private func seek(to time: Double, play: Bool = true) {
-        guard let player else { return }
-        let target = CMTime(seconds: max(0, time - 1), preferredTimescale: 600)
-        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-            if play { player.play() }
+    private func fraction(of x: CGFloat, in width: CGFloat) -> Double {
+        width > 0 ? min(max(x / width, 0), 1) : 0
+    }
+}
+
+private extension View {
+    /// iOS 26 이상에서는 사진 앱과 같은 유리 질감을, 그 아래에서는 반투명 재질을 씁니다.
+    @ViewBuilder
+    func glassBackground(_ shape: some Shape) -> some View {
+        if #available(iOS 26, macOS 26, *) {
+            glassEffect(.regular.interactive(), in: shape)
+        } else {
+            background(.regularMaterial, in: shape)
+        }
+    }
+
+    @ViewBuilder
+    func glassButtonStyle(prominent: Bool) -> some View {
+        if #available(iOS 26, macOS 26, *) {
+            if prominent { buttonStyle(.glassProminent) } else { buttonStyle(.glass) }
+        } else {
+            if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered) }
         }
     }
 }
+
+/// 컨트롤 없이 화면만 그리는 플레이어. 컨트롤은 VideoMomentView 가 직접 그립니다.
+#if os(iOS)
+private struct PlayerSurface: UIViewRepresentable {
+    let player: AVPlayer
+
+    func makeUIView(context: Context) -> PlayerLayerView {
+        let view = PlayerLayerView()
+        view.playerLayer.videoGravity = .resizeAspectFill
+        return view
+    }
+
+    func updateUIView(_ view: PlayerLayerView, context: Context) {
+        view.playerLayer.player = player
+    }
+
+    final class PlayerLayerView: UIView {
+        override class var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    }
+}
+#else
+private struct PlayerSurface: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .none
+        view.videoGravity = .resizeAspectFill
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        view.player = player
+    }
+}
+#endif

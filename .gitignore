@@ -1,0 +1,9 @@
+.DS_Store
+xcuserdata/
+DerivedData/
+build/
+*.xcodeproj/
+*.xcworkspace/
+
+# scripts/download_models.sh 로 내려받는 대용량 모델
+MomentFinder/Resources/Models/

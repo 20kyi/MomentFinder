@@ -7,6 +7,9 @@ struct AssetDetailView: View {
     /// 화면을 연 시점의 결과 목록. 보는 도중 분석으로 결과가 바뀌어도 순서가 흔들리지 않도록 고정합니다.
     @State private var items: [ResultItem]
     @State private var currentID: String?
+    @State private var width: CGFloat = 0
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
 
     init(item: ResultItem, in items: [ResultItem] = []) {
         _items = State(initialValue: items.contains { $0.id == item.id } ? items : [item])
@@ -18,19 +21,26 @@ struct AssetDetailView: View {
     }
 
     var body: some View {
-        ScrollView(.horizontal) {
-            LazyHStack(spacing: 0) {
-                ForEach(items) { item in
-                    page(item)
-                        .containerRelativeFrame(.horizontal)
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(items) { item in
+                        page(item)
+                            .containerRelativeFrame(.horizontal)
+                    }
                 }
+                .scrollTargetLayout()
             }
-            .scrollTargetLayout()
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $currentID)
+            .scrollIndicators(.hidden)
+            .scrollDisabled(items.count < 2)
+            // scrollPosition 의 처음 값만으로는 첫 페이지에 머물러서, 너비가 정해지거나 바뀔 때마다 선택된 결과로 맞춥니다.
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            .onChange(of: width) {
+                if let currentID { proxy.scrollTo(currentID) }
+            }
         }
-        .scrollTargetBehavior(.paging)
-        .scrollPosition(id: $currentID)
-        .scrollIndicators(.hidden)
-        .scrollDisabled(items.count < 2)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 SubjectsInAssetRow(assetID: item.id)
@@ -52,7 +62,44 @@ struct AssetDetailView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            ToolbarItemGroup(placement: Self.actionsPlacement) {
+                AssetShareLink(item: item)
+                #if os(iOS)
+                Spacer()
+                #endif
+                FavoriteButton(item: item)
+                #if os(iOS)
+                Spacer()
+                #endif
+                Button("삭제", systemImage: "trash", role: .destructive) {
+                    Task { await model.delete([item]) }
+                }
+                .accessibilityIdentifier("delete-button")
+            }
         }
+        .onChange(of: model.libraryRevision) { refetchItems() }
+    }
+
+    #if os(iOS)
+    private static let actionsPlacement = ToolbarItemPlacement.bottomBar
+    #else
+    private static let actionsPlacement = ToolbarItemPlacement.primaryAction
+    #endif
+
+    /// 즐겨찾기 변경을 반영하고, 지워진 항목은 빼고 바로 다음(마지막이었다면 이전) 결과로 넘어갑니다. 남은 게 없으면 닫습니다.
+    private func refetchItems() {
+        let refetched = ResultItem.refetched(items)
+        guard refetched != items else { return }
+        guard !refetched.isEmpty else {
+            dismiss()
+            return
+        }
+        let remaining = Set(refetched.map(\.id))
+        if let currentID, !remaining.contains(currentID), let index = items.firstIndex(where: { $0.id == currentID }) {
+            self.currentID = items[index...].first { remaining.contains($0.id) }?.id
+                ?? items[..<index].last { remaining.contains($0.id) }?.id
+        }
+        items = refetched
     }
 
     @ViewBuilder

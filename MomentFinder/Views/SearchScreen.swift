@@ -94,6 +94,7 @@ struct SearchScreen: View {
                 ForEach(model.results) { item in
                     Button { selection = item } label: { AssetThumbnail(item: item) }
                         .buttonStyle(.plain)
+                        .contextMenu { AssetContextMenu(item: item) }
                         .accessibilityIdentifier(item.hit.kind == .video ? "result-video" : "result-photo")
                 }
             }

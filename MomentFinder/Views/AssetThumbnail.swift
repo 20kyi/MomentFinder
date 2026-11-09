@@ -34,6 +34,16 @@ struct AssetThumbnail: View {
                         .padding(4)
                 }
             }
+            .overlay(alignment: .bottomLeading) {
+                if item.asset.isFavorite && !compact {
+                    Image(systemName: "heart.fill")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .shadow(radius: 1)
+                        .padding(5)
+                        .accessibilityLabel("즐겨찾기")
+                }
+            }
             .contentShape(Rectangle())
             .task(id: "\(item.id)@\(item.hit.time)") {
                 if item.hit.kind == .video, let frame = await PhotoLibrary.videoFrame(for: item.asset, at: item.hit.time, side: 300) {

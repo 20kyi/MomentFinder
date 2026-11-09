@@ -5,6 +5,7 @@ struct MomentFinderApp: App {
     @State private var model: AppModel
 
     init() {
+        PhotoLibrary.removeSharedExports()
         let model = AppModel()
         _model = State(initialValue: model)
         #if os(iOS)

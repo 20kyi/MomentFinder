@@ -98,6 +98,78 @@ final class SearchFlowUITests: XCTestCase {
         attachScreenshot("12-scrubbed-strip")
     }
 
+    /// 첫 번째가 아닌 결과를 열어도 그 결과가 화면에 보여야 합니다. 공유·삭제 대상과 보이는 항목이 어긋나면 안 됩니다.
+    func testOpensTappedResultInDetail() throws {
+        app.launch()
+        grantPhotoAccessIfNeeded()
+
+        let ready = app.staticTexts.containing(NSPredicate(format: "label CONTAINS '검색 가능'")).firstMatch
+        XCTAssertTrue(ready.waitForExistence(timeout: 180), "인덱싱이 끝나지 않았습니다")
+
+        search("two cats sleeping on a couch")
+        let results = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'result-'"))
+        XCTAssertTrue(results.firstMatch.waitForExistence(timeout: 30))
+        guard waitUntil(timeout: 10, { results.count >= 2 }),
+              results.element(boundBy: 0).identifier != results.element(boundBy: 1).identifier else {
+            throw XCTSkip("첫 두 결과의 종류(사진/동영상)가 달라야 구분할 수 있습니다")
+        }
+        let opensVideo = results.element(boundBy: 1).identifier == "result-video"
+        results.element(boundBy: 1).tap()
+
+        let strip = app.buttons.matching(identifier: "detail-strip-item")
+        XCTAssertTrue(strip.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(strip.element(boundBy: 1).isSelected)
+        let moment = app.buttons["moment-button"]
+        let showsVideo = waitUntil(timeout: 3) { moment.exists && app.windows.firstMatch.frame.contains(moment.frame) }
+        attachScreenshot("16-opened-second")
+        XCTAssertEqual(showsVideo, opensVideo, "누른 결과가 아닌 다른 결과가 화면에 보입니다")
+    }
+
+    /// 상세 화면에서 즐겨찾기를 켜고 끄고, 공유 시트와 삭제 확인 창을 열 수 있어야 합니다. 삭제는 확인 창에서 취소합니다.
+    func testFavoriteShareAndDeleteInDetail() throws {
+        app.launch()
+        grantPhotoAccessIfNeeded()
+
+        let ready = app.staticTexts.containing(NSPredicate(format: "label CONTAINS '검색 가능'")).firstMatch
+        XCTAssertTrue(ready.waitForExistence(timeout: 180), "인덱싱이 끝나지 않았습니다")
+
+        search("two cats sleeping on a couch")
+        let firstResult = app.buttons["result-photo"].firstMatch
+        XCTAssertTrue(firstResult.waitForExistence(timeout: 30))
+        firstResult.tap()
+
+        let favorite = app.buttons["favorite-button"]
+        XCTAssertTrue(favorite.waitForExistence(timeout: 10), "즐겨찾기 버튼이 없습니다")
+        let before = favorite.label
+        favorite.tap()
+        XCTAssertTrue(waitUntil { favorite.label != before }, "즐겨찾기를 눌러도 바뀌지 않았습니다")
+        attachScreenshot("13-favorite-toggled")
+        favorite.tap()
+        XCTAssertTrue(waitUntil { favorite.label == before }, "즐겨찾기를 되돌리지 못했습니다")
+
+        app.buttons["share-button"].tap()
+        let shareSheet = app.otherElements["ActivityListView"]
+        XCTAssertTrue(shareSheet.waitForExistence(timeout: 10), "공유 시트가 열리지 않았습니다")
+        attachScreenshot("14-share-sheet")
+        let close = shareSheet.buttons["Close"].exists ? shareSheet.buttons["Close"] : shareSheet.buttons["닫기"]
+        if close.exists { close.tap() } else { app.swipeDown() }
+        XCTAssertTrue(waitUntil(timeout: 5) { !shareSheet.exists })
+
+        app.buttons["delete-button"].tap()
+        // 삭제 확인 창은 앱이 아니라 시스템이 띄웁니다.
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let cancelLabels = ["Don’t Allow", "Don't Allow", "허용 안 함"]
+        var cancel: XCUIElement?
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            cancel = cancelLabels.flatMap { [springboard.buttons[$0], app.buttons[$0]] }.first { $0.exists }
+            return cancel != nil
+        }, "삭제 확인 창이 뜨지 않았습니다")
+        attachScreenshot("15-delete-confirm")
+        cancel?.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { cancel?.exists == false })
+        XCTAssertTrue(favorite.exists, "삭제를 취소했는데 상세 화면이 닫혔습니다")
+    }
+
     /// 인물 분석이 끝나면 인물 화면에서 그룹을 보고 이름을 붙인 뒤, 그 이름이 검색 칩으로 나타나야 합니다.
     func testNamesSubjectGroupAndFiltersByChip() throws {
         app.launch()

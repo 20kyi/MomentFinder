@@ -38,6 +38,9 @@ struct PersonDetailView: View {
                                 }
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            if !isSelecting { AssetContextMenu(item: item) }
+                        }
                     }
                 }
             }
@@ -78,6 +81,7 @@ struct PersonDetailView: View {
         }
         .navigationDestination(item: $opened) { AssetDetailView(item: $0, in: items) }
         .task(id: group) { await reload() }
+        .onChange(of: model.libraryRevision) { Task { await reload() } }
     }
 
     private var header: some View {

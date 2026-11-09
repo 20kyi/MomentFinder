@@ -10,6 +10,22 @@ struct ResultItem: Identifiable, Hashable {
     let asset: PHAsset
 
     var id: String { hit.assetID }
+
+    /// PHAsset 은 가져온 시점의 값이라, 즐겨찾기가 바뀌면 새로 가져온 에셋과 다르게 비교되어야 화면이 갱신됩니다.
+    static func == (lhs: ResultItem, rhs: ResultItem) -> Bool {
+        lhs.hit == rhs.hit && lhs.asset.isFavorite == rhs.asset.isFavorite
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(hit)
+    }
+
+    /// 보관함에서 에셋을 다시 가져옵니다. 삭제된 항목은 빠집니다.
+    static func refetched(_ items: [ResultItem]) -> [ResultItem] {
+        guard !items.isEmpty else { return items }
+        let assets = PhotoLibrary.assets(withIDs: items.map(\.id))
+        return items.compactMap { item in assets[item.id].map { ResultItem(hit: item.hit, asset: $0) } }
+    }
 }
 
 enum MediaScope: String, CaseIterable, Identifiable {
@@ -67,6 +83,8 @@ final class AppModel {
     /// 검색 칩에서 고른 이름. 검색어와 함께 적용됩니다.
     var selectedNames: Set<String> = []
     private(set) var recognizesFaces = false
+    /// 보관함이 바뀔 때마다(삭제, 즐겨찾기, 다른 앱에서의 편집) 늘어납니다. 결과를 따로 들고 있는 화면이 다시 불러오는 신호입니다.
+    private(set) var libraryRevision = 0
 
     let settings = IndexSettings()
     let translator = QueryTranslator()
@@ -312,6 +330,30 @@ final class AppModel {
         return hits.compactMap { hit in assets[hit.assetID].map { ResultItem(hit: hit, asset: $0) } }
     }
 
+    // MARK: - Editing
+
+    func setFavorite(_ isFavorite: Bool, for item: ResultItem) async {
+        do {
+            try await PhotoLibrary.setFavorite(isFavorite, for: item.asset)
+            libraryDidChange()
+        } catch {
+            errorMessage = "즐겨찾기를 바꾸지 못했어요. \(error.localizedDescription)"
+        }
+    }
+
+    /// 지웠으면 true. 확인 창에서 취소하거나 실패하면 false 입니다.
+    @discardableResult
+    func delete(_ items: [ResultItem]) async -> Bool {
+        do {
+            guard try await PhotoLibrary.delete(items.map(\.asset)) else { return false }
+            libraryDidChange()
+            return true
+        } catch {
+            errorMessage = "삭제하지 못했어요. \(error.localizedDescription)"
+            return false
+        }
+    }
+
     // MARK: - People
 
     func group(id: Int64) -> SubjectGroup? {
@@ -428,6 +470,9 @@ final class AppModel {
     }
 
     private func libraryDidChange() {
+        libraryRevision += 1
+        results = ResultItem.refetched(results)
+        pendingResults = pendingResults.map(ResultItem.refetched)
         changeTask?.cancel()
         changeTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))

@@ -128,6 +128,54 @@ enum PhotoLibrary {
             }
         }
     }
+    // MARK: - Editing
+
+    /// Photos 앱의 즐겨찾기와 같은 값을 바꿉니다.
+    static func setFavorite(_ isFavorite: Bool, for asset: PHAsset) async throws {
+        try await PHPhotoLibrary.shared().performChanges {
+            PHAssetChangeRequest(for: asset).isFavorite = isFavorite
+        }
+    }
+
+    /// 시스템이 삭제 확인 창을 띄우고, 지운 항목은 Photos 앱의 '최근 삭제된 항목'으로 갑니다.
+    /// 사용자가 확인 창에서 취소하면 false 를 돌려줍니다.
+    static func delete(_ assets: [PHAsset]) async throws -> Bool {
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.deleteAssets(assets as NSArray)
+            }
+            return true
+        } catch let error as PHPhotosError where error.code == .userCancelled {
+            return false
+        }
+    }
+
+    private static var shareFolder: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("Share", isDirectory: true)
+    }
+
+    /// 공유용으로 원본(편집했다면 편집본)을 임시 폴더에 내려받습니다. iCloud 에만 있으면 내려받습니다.
+    /// 공유 시트는 넘겨받은 파일을 자기 쪽으로 복사하므로, 다음 공유 때 이전에 내보낸 파일을 지워 원본이 쌓이지 않게 합니다.
+    static func exportOriginal(of asset: PHAsset) async throws -> URL {
+        let resources = PHAssetResource.assetResources(for: asset)
+        let preferred: [PHAssetResourceType] = asset.mediaType == .video ? [.fullSizeVideo, .video] : [.fullSizePhoto, .photo]
+        guard let resource = preferred.lazy.compactMap({ type in resources.first { $0.type == type } }).first ?? resources.first else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        removeSharedExports()
+        let folder = shareFolder.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent(resource.originalFilename)
+
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = true
+        try await PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: options)
+        return url
+    }
+
+    static func removeSharedExports() {
+        try? FileManager.default.removeItem(at: shareFolder)
+    }
 }
 
 private final class ResumeOnce: @unchecked Sendable {

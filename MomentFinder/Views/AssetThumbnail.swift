@@ -3,11 +3,12 @@ import SwiftUI
 
 struct AssetThumbnail: View {
     let item: ResultItem
+    /// 작은 썸네일 줄에 쓸 때는 정사각형을 고집하지 않고, 동영상 표시도 아이콘만 남깁니다.
+    var compact = false
     @State private var image: PlatformImage?
 
     var body: some View {
-        Color.secondary.opacity(0.15)
-            .aspectRatio(1, contentMode: .fit)
+        placeholder
             .overlay {
                 if let image {
                     Image(platformImage: image)
@@ -17,7 +18,13 @@ struct AssetThumbnail: View {
             }
             .clipped()
             .overlay(alignment: .bottomTrailing) {
-                if item.hit.kind == .video {
+                if item.hit.kind == .video && compact {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white)
+                        .shadow(radius: 1)
+                        .padding(3)
+                } else if item.hit.kind == .video {
                     Label(TimeFormatter.string(item.hit.time), systemImage: "play.fill")
                         .font(.caption2.monospacedDigit().weight(.semibold))
                         .padding(.horizontal, 6)
@@ -35,6 +42,15 @@ struct AssetThumbnail: View {
                     image = await PhotoLibrary.image(for: item.asset, side: 300, allowNetwork: true)
                 }
             }
+    }
+
+    @ViewBuilder
+    private var placeholder: some View {
+        if compact {
+            Color.secondary.opacity(0.15)
+        } else {
+            Color.secondary.opacity(0.15).aspectRatio(1, contentMode: .fit)
+        }
     }
 }
 

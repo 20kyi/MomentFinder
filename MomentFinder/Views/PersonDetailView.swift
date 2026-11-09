@@ -76,7 +76,7 @@ struct PersonDetailView: View {
                 .background(.bar)
             }
         }
-        .navigationDestination(item: $opened) { AssetDetailView(item: $0) }
+        .navigationDestination(item: $opened) { AssetDetailView(item: $0, in: items) }
         .task(id: group) { await reload() }
     }
 

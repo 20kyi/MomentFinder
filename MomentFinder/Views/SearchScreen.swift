@@ -41,7 +41,7 @@ struct SearchScreen: View {
                     }
                 }
                 .sheet(isPresented: $showsIndexStatus) { IndexStatusView() }
-                .navigationDestination(item: $selection) { AssetDetailView(item: $0) }
+                .navigationDestination(item: $selection) { AssetDetailView(item: $0, in: model.results) }
                 .navigationDestination(isPresented: $showsPeople) { PeopleView() }
         }
     }

@@ -50,6 +50,46 @@ final class SearchFlowUITests: XCTestCase {
         attachScreenshot("5-weak-matches")
     }
 
+    /// 결과를 열면 아래에 다른 결과 썸네일이 보이고, 좌우로 넘기거나 썸네일을 눌러 이동할 수 있어야 합니다.
+    func testSwipesBetweenResultsInDetail() throws {
+        app.launch()
+        grantPhotoAccessIfNeeded()
+
+        let ready = app.staticTexts.containing(NSPredicate(format: "label CONTAINS '검색 가능'")).firstMatch
+        XCTAssertTrue(ready.waitForExistence(timeout: 180), "인덱싱이 끝나지 않았습니다")
+
+        search("two cats sleeping on a couch")
+        let results = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'result-'"))
+        XCTAssertTrue(results.firstMatch.waitForExistence(timeout: 30))
+        let showWeak = app.buttons["관련도가 낮은 사진도 보기"]
+        if !waitUntil(timeout: 5, { results.count >= 3 }), showWeak.exists {
+            showWeak.tap()
+        }
+        guard waitUntil(timeout: 10, { results.count >= 3 }) else { throw XCTSkip("결과가 3개 미만입니다") }
+        results.element(boundBy: 0).tap()
+
+        let strip = app.buttons.matching(identifier: "detail-strip-item")
+        XCTAssertTrue(strip.firstMatch.waitForExistence(timeout: 10), "아래 썸네일 줄이 없습니다")
+        XCTAssertTrue(strip.element(boundBy: 0).isSelected, "처음 연 결과가 선택되어 있지 않습니다")
+        let moment = app.buttons["moment-button"]
+        if moment.waitForExistence(timeout: 5) {
+            XCTAssertTrue(moment.isHittable, "찾은 장면 버튼이 썸네일 줄에 가려졌습니다")
+        }
+        attachScreenshot("9-detail-strip")
+
+        app.swipeLeft()
+        XCTAssertTrue(waitUntil { strip.element(boundBy: 1).isSelected }, "왼쪽으로 넘겨도 다음 결과로 가지 않았습니다")
+        attachScreenshot("10-swiped-next")
+
+        app.swipeRight()
+        XCTAssertTrue(waitUntil { strip.element(boundBy: 0).isSelected }, "오른쪽으로 넘겨도 이전 결과로 가지 않았습니다")
+
+        strip.element(boundBy: 2).tap()
+        XCTAssertTrue(waitUntil { strip.element(boundBy: 2).isSelected }, "썸네일을 눌러도 이동하지 않았습니다")
+        sleep(1)
+        attachScreenshot("11-tapped-strip")
+    }
+
     /// 인물 분석이 끝나면 인물 화면에서 그룹을 보고 이름을 붙인 뒤, 그 이름이 검색 칩으로 나타나야 합니다.
     func testNamesSubjectGroupAndFiltersByChip() throws {
         app.launch()
@@ -104,6 +144,15 @@ final class SearchFlowUITests: XCTestCase {
             springboard.buttons[label].tap()
             break
         }
+    }
+
+    private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        return condition()
     }
 
     private func attachScreenshot(_ name: String) {

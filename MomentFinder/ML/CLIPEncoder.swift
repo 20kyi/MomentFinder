@@ -85,7 +85,7 @@ final class CLIPEncoder: @unchecked Sendable {
     }
 
     /// 저장된 픽셀(size)을 화면 방향으로 돌리는 변환. CoreGraphics 의 y-up 좌표계 기준입니다.
-    private static func transform(for orientation: CGImagePropertyOrientation, size: CGSize) -> CGAffineTransform {
+    static func transform(for orientation: CGImagePropertyOrientation, size: CGSize) -> CGAffineTransform {
         let w = size.width, h = size.height
         switch orientation {
         case .up: return .identity

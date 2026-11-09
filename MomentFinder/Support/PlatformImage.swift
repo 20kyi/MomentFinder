@@ -14,6 +14,10 @@ extension Image {
 }
 
 extension UIImage {
+    convenience init(cgImageValue: CGImage) {
+        self.init(cgImage: cgImageValue)
+    }
+
     var cgImageValue: CGImage? { cgImage }
 
     var cgOrientation: CGImagePropertyOrientation {
@@ -42,6 +46,10 @@ extension Image {
 }
 
 extension NSImage {
+    convenience init(cgImageValue: CGImage) {
+        self.init(cgImage: cgImageValue, size: .zero)
+    }
+
     var cgImageValue: CGImage? { cgImage(forProposedRect: nil, context: nil, hints: nil) }
     var cgOrientation: CGImagePropertyOrientation { .up }
 }

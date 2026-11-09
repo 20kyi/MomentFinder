@@ -27,7 +27,8 @@ struct StoredVector: Sendable {
 struct SearchHit: Identifiable, Hashable, Sendable {
     let assetID: String
     let kind: MediaKind
-    let score: Float
+    /// 검색어와의 유사도. 이름만으로 고른 결과처럼 순위가 없으면 nil 입니다.
+    let score: Float?
     /// 동영상에서 가장 잘 맞는 장면의 시각(초).
     let time: Double
 
@@ -42,9 +43,21 @@ struct IndexProgress: Sendable, Equatable {
     /// 동영상 장면 분석. iCloud 동영상은 원본을 내려받아야 해서 오래 걸립니다.
     var videoTotal = 0
     var videoScenesDone = 0
+    /// 인물·반려동물 분석. 0 이면 이 단계를 하지 않습니다.
+    var subjectTotal = 0
+    var subjectsDone = 0
 
     var fraction: Double { total == 0 ? 0 : Double(indexed) / Double(total) }
     var isQuickPassComplete: Bool { indexed + failed >= total }
     var sceneFraction: Double { videoTotal == 0 ? 1 : Double(videoScenesDone) / Double(videoTotal) }
     var remainingVideoScenes: Int { max(0, videoTotal - videoScenesDone) }
+    var subjectFraction: Double { subjectTotal == 0 ? 1 : Double(subjectsDone) / Double(subjectTotal) }
+    var remainingSubjects: Int { max(0, subjectTotal - subjectsDone) }
+
+    /// 지금 진행 중인 단계의 진행률. 분석 순서(빠른 분석 → 인물 → 동영상 장면)를 따릅니다.
+    var currentStageFraction: Double {
+        if !isQuickPassComplete { return fraction }
+        if remainingSubjects > 0 { return subjectFraction }
+        return sceneFraction
+    }
 }

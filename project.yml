@@ -36,7 +36,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Moment Finder
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.photography
-        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: 사진과 동영상을 기기 안에서 분석해 "고양이 하품" 같은 문장으로 검색할 수 있게 합니다. 사진은 외부로 전송되지 않습니다.
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: 사진과 동영상을 기기 안에서 분석해 "고양이 하품" 같은 문장으로 검색하고, 사진 속 인물과 반려동물을 구분할 수 있게 합니다. 사진과 얼굴 정보는 외부로 전송되지 않습니다.
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight

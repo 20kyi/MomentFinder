@@ -50,6 +50,42 @@ final class SearchFlowUITests: XCTestCase {
         attachScreenshot("5-weak-matches")
     }
 
+    /// 인물 분석이 끝나면 인물 화면에서 그룹을 보고 이름을 붙인 뒤, 그 이름이 검색 칩으로 나타나야 합니다.
+    func testNamesSubjectGroupAndFiltersByChip() throws {
+        app.launch()
+        grantPhotoAccessIfNeeded()
+
+        let ready = app.staticTexts.containing(NSPredicate(format: "label CONTAINS '검색 가능'")).firstMatch
+        XCTAssertTrue(ready.waitForExistence(timeout: 180), "인덱싱이 끝나지 않았습니다")
+        let analyzing = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH '인물·반려동물 분석'")).firstMatch
+        let deadline = Date().addingTimeInterval(300)
+        while analyzing.exists && Date() < deadline { sleep(2) }
+
+        app.buttons["people-button"].tap()
+        XCTAssertTrue(app.navigationBars["인물·반려동물"].waitForExistence(timeout: 10))
+        attachScreenshot("6-people")
+
+        let group = app.buttons["subject-group"].firstMatch
+        guard group.waitForExistence(timeout: 5) else {
+            throw XCTSkip("시뮬레이터 보관함에서 3장 이상 묶인 그룹이 없습니다")
+        }
+        group.tap()
+        let nameField = app.textFields["subject-name-field"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 10))
+        nameField.tap()
+        nameField.typeText("나비\n")
+        attachScreenshot("7-named-group")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let chip = app.buttons["subject-filter-chip"].firstMatch
+        XCTAssertTrue(chip.waitForExistence(timeout: 10), "이름 칩이 나타나지 않았습니다")
+        chip.tap()
+        let firstResult = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'result-'")).firstMatch
+        XCTAssertTrue(firstResult.waitForExistence(timeout: 10))
+        attachScreenshot("8-chip-filter")
+    }
+
     private func search(_ text: String) {
         let field = app.searchFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10))

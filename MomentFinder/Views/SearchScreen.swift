@@ -5,6 +5,7 @@ struct SearchScreen: View {
     @State private var query = ""
     @State private var selection: ResultItem?
     @State private var showsIndexStatus = false
+    @State private var showsPeople = false
     @State private var scrollPosition = ScrollPosition(edge: .top)
 
     private static let examples = ["고양이 하품", "고양이가 하품하는 동영상", "바닷가 일몰", "생일 케이크 촛불", "눈 오는 거리"]
@@ -14,21 +15,34 @@ struct SearchScreen: View {
 
         NavigationStack {
             content
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if !model.subjectNames.isEmpty {
+                        SubjectChipsBar()
+                    }
+                }
                 .navigationTitle("Moment Finder")
                 .searchable(text: $query, prompt: "예: 고양이 하품")
                 .searchScopes($model.scope) {
                     ForEach(MediaScope.allCases) { Text($0.title).tag($0) }
                 }
                 .onSubmit(of: .search) { runSearch() }
-                .onChange(of: model.scope) { if !query.isEmpty { runSearch() } }
+                .onChange(of: model.scope) { if !query.isEmpty || !model.selectedNames.isEmpty { runSearch() } }
+                .onChange(of: model.selectedNames) { runSearch() }
                 .onChange(of: query) { if query.isEmpty { runSearch() } }
                 .toolbar {
+                    ToolbarItem(placement: .navigation) {
+                        Button { showsPeople = true } label: {
+                            Label("인물·반려동물", systemImage: "person.2")
+                        }
+                        .accessibilityIdentifier("people-button")
+                    }
                     ToolbarItem(placement: .primaryAction) {
                         Button { showsIndexStatus = true } label: { IndexStatusBadge() }
                     }
                 }
                 .sheet(isPresented: $showsIndexStatus) { IndexStatusView() }
                 .navigationDestination(item: $selection) { AssetDetailView(item: $0) }
+                .navigationDestination(isPresented: $showsPeople) { PeopleView() }
         }
     }
 
@@ -77,7 +91,7 @@ struct SearchScreen: View {
             }
             .animation(.default, value: model.results.map(\.id))
 
-            if !model.showsWeakMatches {
+            if model.isRankedSearch && !model.showsWeakMatches {
                 Button("관련도가 낮은 사진도 보기") {
                     Task { await model.showWeakMatches() }
                 }
@@ -103,13 +117,15 @@ struct SearchScreen: View {
         ContentUnavailableView {
             Label("딱 맞는 사진이 없어요", systemImage: "magnifyingglass")
         } description: {
-            if model.isIndexing {
+            if !model.isRankedSearch {
+                Text("“\(interpreted)” 가 함께 나온 사진이 없어요.")
+            } else if model.isIndexing {
                 Text("“\(interpreted)” 와 충분히 비슷한 사진을 아직 찾지 못했어요. 분석이 진행되면 결과가 나타날 수 있어요.")
             } else {
                 Text("“\(interpreted)” 와 충분히 비슷한 사진을 찾지 못했어요.")
             }
         } actions: {
-            if !model.showsWeakMatches {
+            if model.isRankedSearch && !model.showsWeakMatches {
                 Button("비슷한 사진 보기") {
                     Task { await model.showWeakMatches() }
                 }
@@ -141,6 +157,21 @@ struct SearchScreen: View {
             Section {
                 IndexSummaryRow()
             }
+            Section {
+                NavigationLink {
+                    PeopleView()
+                } label: {
+                    LabeledContent {
+                        if !model.groups.isEmpty { Text("\(model.groups.count)") }
+                    } label: {
+                        Label("인물·반려동물", systemImage: "person.2")
+                    }
+                }
+            } footer: {
+                Text(model.subjectNames.isEmpty
+                     ? "이름을 붙이면 \"초코 산책하는 동영상\"처럼 이름으로 검색할 수 있어요."
+                     : "\"\(model.subjectNames[0]) 웃는 사진\"처럼 이름을 넣어 검색해 보세요.")
+            }
             Section("이렇게 검색해 보세요") {
                 ForEach(Self.examples, id: \.self) { example in
                     Button {
@@ -158,6 +189,40 @@ struct SearchScreen: View {
         let text = query
         scrollPosition.scrollTo(edge: .top)
         Task { await model.search(text) }
+    }
+}
+
+/// 이름 붙은 인물·반려동물 칩. 여러 개를 고르면 모두 나오는 사진만 보여줍니다.
+private struct SubjectChipsBar: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.subjectNames, id: \.self) { name in
+                    let selected = model.selectedNames.contains(name)
+                    Button {
+                        if selected { model.selectedNames.remove(name) } else { model.selectedNames.insert(name) }
+                    } label: {
+                        HStack(spacing: 6) {
+                            SubjectThumbnail(subject: model.groups.first { $0.name == name }?.cover, size: 24)
+                            Text(name).font(.subheadline.weight(.medium))
+                        }
+                        .padding(.leading, 4)
+                        .padding(.trailing, 12)
+                        .padding(.vertical, 4)
+                        .background(selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
+                        .foregroundStyle(selected ? .white : .primary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("subject-filter-chip")
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 6)
+        }
+        .background(.bar)
     }
 }
 
@@ -199,6 +264,13 @@ private struct IndexSummaryRow: View {
                     .foregroundStyle(.secondary)
             } else {
                 Label("사진·동영상 \(model.indexedAssetCount)개 검색 가능", systemImage: "checkmark.circle")
+                if model.progress.remainingSubjects > 0 {
+                    Label(
+                        "인물·반려동물 분석\(model.isIndexing ? " 중" : "") \(model.progress.subjectsDone) / \(model.progress.subjectTotal)",
+                        systemImage: "person.crop.rectangle.stack"
+                    )
+                    ProgressView(value: model.progress.subjectFraction)
+                }
                 if model.progress.remainingVideoScenes > 0 {
                     VideoSceneProgressView()
                 }

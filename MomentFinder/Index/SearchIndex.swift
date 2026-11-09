@@ -61,9 +61,11 @@ actor SearchIndex {
     }
 
     /// 에셋별로 가장 점수가 높은 프레임을 대표로 삼아 정렬된 결과를 돌려줍니다. minScore 미만인 에셋은 뺍니다.
-    func search(_ query: [Float], kind: MediaKind?, minScore: Float = -.infinity, limit: Int) -> [SearchHit] {
+    /// assets 를 주면 그 에셋들 안에서만 찾습니다(특정 인물이 나오는 사진 등).
+    func search(_ query: [Float], kind: MediaKind?, assets: Set<String>? = nil, minScore: Float = -.infinity, limit: Int) -> [SearchHit] {
         let rows = rowSlots.count
         guard rows > 0, limit > 0, query.count == dimension else { return [] }
+        let allowed = assets.map { assets in slotIDs.map { assets.contains($0) } }
 
         var scores = [Float](repeating: 0, count: rows)
         matrix.withUnsafeBufferPointer { m in
@@ -80,6 +82,7 @@ actor SearchIndex {
                     for row in 0..<rows {
                         let slot = rowSlots[row]
                         if let kind, slotKinds[slot] != kind { continue }
+                        if let allowed, !allowed[slot] { continue }
                         if scores[row] > bestScore[slot] {
                             bestScore[slot] = scores[row]
                             bestRow[slot] = row

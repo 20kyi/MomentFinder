@@ -13,15 +13,20 @@ struct AssetDetailView: View {
                 PhotoDetailView(asset: item.asset)
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            SubjectsInAssetRow(assetID: item.hit.assetID)
+        }
         .navigationTitle(title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Text("일치도 \(item.hit.score, format: .number.precision(.fractionLength(3)))")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+            if let score = item.hit.score {
+                ToolbarItem(placement: .primaryAction) {
+                    Text("일치도 \(score, format: .number.precision(.fractionLength(3)))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -39,6 +44,134 @@ struct AssetDetailView: View {
         formatter.dateFormat = "yyyy.MM.dd"
         return formatter
     }()
+}
+
+/// 사진 속에서 찾은 인물·반려동물. 이름 있는 그룹은 눌러서 모아 보고, 이름이 없거나 잘못된 경우 이름을 붙입니다.
+private struct SubjectsInAssetRow: View {
+    let assetID: String
+    @Environment(AppModel.self) private var model
+    @State private var entries: [(subject: StoredSubject, name: String?)] = []
+    @State private var naming: StoredSubject?
+    @State private var openedGroup: Int64?
+
+    var body: some View {
+        Group {
+            if !entries.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("이 사진 속 인물")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 14) {
+                            ForEach(entries, id: \.subject.id) { entry in
+                                chip(entry.subject, name: entry.name)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(.bar)
+            }
+        }
+        .task(id: model.groups) { entries = await model.subjects(inAsset: assetID) }
+        .sheet(item: $naming) { subject in
+            NameSubjectSheet(subject: subject, currentName: entries.first { $0.subject.id == subject.id }?.name)
+        }
+        .navigationDestination(item: $openedGroup) { PersonDetailView(clusterID: $0) }
+    }
+
+    private func chip(_ subject: StoredSubject, name: String?) -> some View {
+        Button {
+            if name != nil, let clusterID = subject.clusterID {
+                openedGroup = clusterID
+            } else {
+                naming = subject
+            }
+        } label: {
+            VStack(spacing: 4) {
+                SubjectThumbnail(subject: subject, size: 44)
+                Text(name ?? "이름 없음")
+                    .font(.caption2)
+                    .foregroundStyle(name == nil ? .secondary : .primary)
+                    .lineLimit(1)
+            }
+            .frame(width: 60)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("이름 바꾸기", systemImage: "pencil") { naming = subject }
+        }
+        .accessibilityIdentifier("subject-chip")
+    }
+}
+
+private struct NameSubjectSheet: View {
+    let subject: StoredSubject
+    let currentName: String?
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+
+    private var suggestions: [String] {
+        Array(Set(model.groups.filter { $0.species == subject.species }.compactMap(\.name))).sorted()
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack {
+                        Spacer()
+                        SubjectThumbnail(subject: subject, size: 96)
+                        Spacer()
+                    }
+                    .listRowBackground(Color.clear)
+                }
+                Section {
+                    TextField("이름", text: $name)
+                        .submitLabel(.done)
+                        .onSubmit { save(name) }
+                } footer: {
+                    Text(currentName == nil
+                         ? "이 그룹의 모든 사진에 이름이 붙어요. 이미 있는 이름이면 한 그룹으로 합쳐져요."
+                         : "이 사진만 다른 이름의 그룹으로 옮겨요.")
+                }
+                if !suggestions.isEmpty {
+                    Section("이미 있는 이름") {
+                        ForEach(suggestions, id: \.self) { suggestion in
+                            Button(suggestion) { save(suggestion) }
+                        }
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .navigationTitle(subject.species == .person ? "누구예요?" : "이름이 뭐예요?")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("취소") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("저장") { save(name) }
+                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .onAppear { name = currentName ?? "" }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func save(_ value: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != currentName else { dismiss(); return }
+        Task {
+            await model.nameSubject(subject.id, as: trimmed)
+            dismiss()
+        }
+    }
 }
 
 private struct PhotoDetailView: View {

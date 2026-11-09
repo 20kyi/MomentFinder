@@ -5,7 +5,7 @@ struct IndexStatusBadge: View {
 
     var body: some View {
         if model.isIndexing {
-            Gauge(value: model.progress.isQuickPassComplete ? model.progress.sceneFraction : model.progress.fraction) {
+            Gauge(value: model.progress.currentStageFraction) {
                 Image(systemName: "sparkles")
             }
             .gaugeStyle(.accessoryCircularCapacity)
@@ -32,6 +32,9 @@ struct IndexStatusView: View {
                 Section("분석 상태") {
                     LabeledContent("검색 가능", value: "\(model.indexedAssetCount)개")
                     LabeledContent("진행", value: "\(model.progress.indexed) / \(model.progress.total)")
+                    if model.progress.subjectTotal > 0 {
+                        LabeledContent("인물·반려동물 분석", value: "\(model.progress.subjectsDone) / \(model.progress.subjectTotal)")
+                    }
                     if model.progress.videoTotal > 0 {
                         LabeledContent("동영상 장면 분석", value: "\(model.progress.videoScenesDone) / \(model.progress.videoTotal)")
                     }
@@ -39,7 +42,7 @@ struct IndexStatusView: View {
                         LabeledContent("실패 (다음에 재시도)", value: "\(model.progress.failed)개")
                     }
                     if model.isIndexing {
-                        ProgressView(value: model.progress.isQuickPassComplete ? model.progress.sceneFraction : model.progress.fraction)
+                        ProgressView(value: model.progress.currentStageFraction)
                         Button("일시정지") { model.pauseIndexing() }
                     } else {
                         Button("지금 분석") { model.startIndexing() }
@@ -52,10 +55,11 @@ struct IndexStatusView: View {
                     Toggle("셀룰러 데이터 허용", isOn: $settings.allowCellular)
                         .disabled(!settings.useICloud)
                     Toggle("동영상 분석", isOn: $settings.includeVideos)
+                    Toggle("인물·반려동물 구분", isOn: $settings.analyzeSubjects)
                 } header: {
                     Text("옵션")
                 } footer: {
-                    Text("사진과 동영상 대표 장면을 먼저 분석해 바로 검색할 수 있게 해요. 그다음 동영상을 1초 간격으로 분석해서 \"하품\" 같은 순간도 찾을 수 있게 해요. iCloud에만 있는 동영상은 원본을 내려받아야 해서 기기에 있는 동영상보다 나중에 분석해요.")
+                    Text("사진과 동영상 대표 장면을 먼저 분석해 바로 검색할 수 있게 해요. 그다음 얼굴과 개·고양이를 찾아 인물별로 묶고, 동영상을 1초 간격으로 분석해서 \"하품\" 같은 순간도 찾을 수 있게 해요. iCloud에만 있는 동영상은 원본을 내려받아야 해서 기기에 있는 동영상보다 나중에 분석해요. 얼굴 정보는 기기 밖으로 나가지 않아요.")
                 }
 
                 Section {

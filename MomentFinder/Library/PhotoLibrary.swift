@@ -17,6 +17,8 @@ struct AnalysisImage: @unchecked Sendable {
 enum PhotoLibrary {
     /// CLIP 입력(256px)보다 약간 크게 요청해 센터 크롭 후에도 해상도가 충분하도록 합니다.
     static let analysisSide: CGFloat = 320
+    /// 얼굴 인식은 단체 사진 속 작은 얼굴도 잡아야 해서 사진 전체를 이 크기 안에 맞춰 따로 요청합니다.
+    static let subjectAnalysisSide: CGFloat = 1024
 
     static var authorizationStatus: PHAuthorizationStatus {
         PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -48,13 +50,23 @@ enum PhotoLibrary {
         return map
     }
 
-    static func analysisImage(for asset: PHAsset, allowNetwork: Bool) async -> AnalysisImage? {
-        guard let image = await image(for: asset, side: analysisSide, allowNetwork: allowNetwork),
+    static func analysisImage(
+        for asset: PHAsset,
+        side: CGFloat = analysisSide,
+        contentMode: PHImageContentMode = .aspectFill,
+        allowNetwork: Bool
+    ) async -> AnalysisImage? {
+        guard let image = await image(for: asset, side: side, contentMode: contentMode, allowNetwork: allowNetwork),
               let cgImage = image.cgImageValue else { return nil }
         return AnalysisImage(cgImage: cgImage, orientation: image.cgOrientation)
     }
 
-    static func image(for asset: PHAsset, side: CGFloat, allowNetwork: Bool) async -> PlatformImage? {
+    static func image(
+        for asset: PHAsset,
+        side: CGFloat,
+        contentMode: PHImageContentMode = .aspectFill,
+        allowNetwork: Bool
+    ) async -> PlatformImage? {
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.resizeMode = .fast
@@ -65,7 +77,7 @@ enum PhotoLibrary {
             PHImageManager.default().requestImage(
                 for: asset,
                 targetSize: CGSize(width: side, height: side),
-                contentMode: .aspectFill,
+                contentMode: contentMode,
                 options: options
             ) { image, info in
                 if (info?[PHImageResultIsDegradedKey] as? Bool) == true { return }

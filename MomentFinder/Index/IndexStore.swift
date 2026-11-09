@@ -46,6 +46,35 @@ final class IndexStore: @unchecked Sendable {
                 embedding BLOB NOT NULL
             );
             CREATE INDEX IF NOT EXISTS vectors_asset ON vectors(asset_id);
+            CREATE TABLE IF NOT EXISTS subject_scans (
+                asset_id TEXT PRIMARY KEY,
+                model TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS subjects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                asset_id TEXT NOT NULL,
+                species INTEGER NOT NULL,
+                box_x REAL NOT NULL,
+                box_y REAL NOT NULL,
+                box_w REAL NOT NULL,
+                box_h REAL NOT NULL,
+                quality REAL NOT NULL,
+                embedding BLOB NOT NULL,
+                cluster_id INTEGER,
+                assignment INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS subjects_asset ON subjects(asset_id);
+            CREATE INDEX IF NOT EXISTS subjects_cluster ON subjects(cluster_id);
+            CREATE TABLE IF NOT EXISTS clusters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                species INTEGER NOT NULL,
+                name TEXT
+            );
+            CREATE TABLE IF NOT EXISTS subject_rejections (
+                subject_id INTEGER NOT NULL,
+                cluster_id INTEGER NOT NULL,
+                PRIMARY KEY (subject_id, cluster_id)
+            );
             """)
         try migrateDetailColumn()
     }
@@ -147,6 +176,8 @@ final class IndexStore: @unchecked Sendable {
             for id in assetIDs {
                 try run("DELETE FROM vectors WHERE asset_id = ?") { sqlite3_bind_text($0, 1, id, -1, Self.transient) }
                 try run("DELETE FROM assets WHERE id = ?") { sqlite3_bind_text($0, 1, id, -1, Self.transient) }
+                try deleteSubjects(assetID: id)
+                try run("DELETE FROM subject_scans WHERE asset_id = ?") { sqlite3_bind_text($0, 1, id, -1, Self.transient) }
             }
             try execute("COMMIT")
         }
@@ -154,8 +185,231 @@ final class IndexStore: @unchecked Sendable {
 
     func deleteAll() throws {
         try locked {
-            try execute("DELETE FROM vectors; DELETE FROM assets;")
+            try execute("""
+                DELETE FROM vectors; DELETE FROM assets;
+                DELETE FROM subject_scans; DELETE FROM subjects; DELETE FROM clusters; DELETE FROM subject_rejections;
+                """)
         }
+    }
+
+    // MARK: - Subjects
+
+    func subjectScannedAssetIDs(model: String) throws -> Set<String> {
+        try locked {
+            var ids = Set<String>()
+            try query("SELECT asset_id FROM subject_scans WHERE model = ?", bind: { sqlite3_bind_text($0, 1, model, -1, Self.transient) }) { row in
+                ids.insert(String(cString: sqlite3_column_text(row, 0)))
+            }
+            return ids
+        }
+    }
+
+    /// 에셋의 이전 분석 결과를 지우고 새로 저장합니다. 감지된 것이 없어도 분석 완료로 기록합니다.
+    @discardableResult
+    func saveSubjects(assetID: String, model: String, subjects: [DetectedSubject]) throws -> [StoredSubject] {
+        try locked {
+            try execute("BEGIN IMMEDIATE")
+            do {
+                try deleteSubjects(assetID: assetID)
+                var stored: [StoredSubject] = []
+                let sql = """
+                    INSERT INTO subjects (asset_id, species, box_x, box_y, box_w, box_h, quality, embedding)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                for subject in subjects {
+                    try run(sql) { stmt in
+                        sqlite3_bind_text(stmt, 1, assetID, -1, Self.transient)
+                        sqlite3_bind_int(stmt, 2, Int32(subject.species.rawValue))
+                        sqlite3_bind_double(stmt, 3, subject.box.minX)
+                        sqlite3_bind_double(stmt, 4, subject.box.minY)
+                        sqlite3_bind_double(stmt, 5, subject.box.width)
+                        sqlite3_bind_double(stmt, 6, subject.box.height)
+                        sqlite3_bind_double(stmt, 7, Double(subject.quality))
+                        subject.vector.withUnsafeBytes { raw in
+                            _ = sqlite3_bind_blob(stmt, 8, raw.baseAddress, Int32(raw.count), Self.transient)
+                        }
+                    }
+                    stored.append(StoredSubject(
+                        id: sqlite3_last_insert_rowid(db),
+                        assetID: assetID,
+                        species: subject.species,
+                        box: subject.box,
+                        quality: subject.quality,
+                        clusterID: nil,
+                        assignment: .auto
+                    ))
+                }
+                try run("INSERT OR REPLACE INTO subject_scans (asset_id, model) VALUES (?, ?)") { stmt in
+                    sqlite3_bind_text(stmt, 1, assetID, -1, Self.transient)
+                    sqlite3_bind_text(stmt, 2, model, -1, Self.transient)
+                }
+                try execute("COMMIT")
+                return stored
+            } catch {
+                try? execute("ROLLBACK")
+                throw error
+            }
+        }
+    }
+
+    /// 군집 중심을 다시 만들 때 쓰려고 벡터와 함께 하나씩 넘겨줍니다. 전부 배열로 들고 있지 않아 메모리를 아낍니다.
+    func forEachSubject(dimension: Int, _ body: (StoredSubject, [Float]) -> Void) throws {
+        try locked {
+            let sql = "SELECT id, asset_id, species, box_x, box_y, box_w, box_h, quality, cluster_id, assignment, embedding FROM subjects"
+            try query(sql) { row in
+                guard let subject = Self.subject(from: row),
+                      let vector = Self.vector(from: row, column: 10, dimension: dimension) else { return }
+                body(subject, vector)
+            }
+        }
+    }
+
+    func subjectVectors(ids: [Int64], dimension: Int) throws -> [Int64: [Float]] {
+        try locked {
+            var vectors: [Int64: [Float]] = [:]
+            for id in ids {
+                try query("SELECT embedding FROM subjects WHERE id = ?", bind: { sqlite3_bind_int64($0, 1, id) }) { row in
+                    vectors[id] = Self.vector(from: row, column: 0, dimension: dimension)
+                }
+            }
+            return vectors
+        }
+    }
+
+    func loadClusters() throws -> [StoredCluster] {
+        try locked {
+            var clusters: [StoredCluster] = []
+            try query("SELECT id, species, name FROM clusters") { row in
+                guard let species = Species(rawValue: Int(sqlite3_column_int(row, 1))) else { return }
+                let name = sqlite3_column_text(row, 2).map { String(cString: $0) }
+                clusters.append(StoredCluster(id: sqlite3_column_int64(row, 0), species: species, name: name))
+            }
+            return clusters
+        }
+    }
+
+    func loadRejections() throws -> [(subjectID: Int64, clusterID: Int64)] {
+        try locked {
+            var rejections: [(Int64, Int64)] = []
+            try query("SELECT subject_id, cluster_id FROM subject_rejections") { row in
+                rejections.append((sqlite3_column_int64(row, 0), sqlite3_column_int64(row, 1)))
+            }
+            return rejections
+        }
+    }
+
+    func createCluster(species: Species, name: String? = nil) throws -> Int64 {
+        try locked {
+            try run("INSERT INTO clusters (species, name) VALUES (?, ?)") { stmt in
+                sqlite3_bind_int(stmt, 1, Int32(species.rawValue))
+                if let name { sqlite3_bind_text(stmt, 2, name, -1, Self.transient) } else { sqlite3_bind_null(stmt, 2) }
+            }
+            return sqlite3_last_insert_rowid(db)
+        }
+    }
+
+    func assignSubjects(_ ids: [Int64], to clusterID: Int64?, assignment: SubjectAssignment) throws {
+        guard !ids.isEmpty else { return }
+        try locked {
+            try execute("BEGIN IMMEDIATE")
+            do {
+                for id in ids {
+                    try run("UPDATE subjects SET cluster_id = ?, assignment = ? WHERE id = ?") { stmt in
+                        if let clusterID { sqlite3_bind_int64(stmt, 1, clusterID) } else { sqlite3_bind_null(stmt, 1) }
+                        sqlite3_bind_int(stmt, 2, Int32(assignment.rawValue))
+                        sqlite3_bind_int64(stmt, 3, id)
+                    }
+                }
+                try execute("COMMIT")
+            } catch {
+                try? execute("ROLLBACK")
+                throw error
+            }
+        }
+    }
+
+    func addRejection(subjectID: Int64, clusterID: Int64) throws {
+        try locked {
+            try run("INSERT OR IGNORE INTO subject_rejections (subject_id, cluster_id) VALUES (?, ?)") { stmt in
+                sqlite3_bind_int64(stmt, 1, subjectID)
+                sqlite3_bind_int64(stmt, 2, clusterID)
+            }
+        }
+    }
+
+    func renameCluster(id: Int64, name: String?) throws {
+        try locked {
+            try run("UPDATE clusters SET name = ? WHERE id = ?") { stmt in
+                if let name { sqlite3_bind_text(stmt, 1, name, -1, Self.transient) } else { sqlite3_bind_null(stmt, 1) }
+                sqlite3_bind_int64(stmt, 2, id)
+            }
+        }
+    }
+
+    /// source 의 구성원과 거절 기록을 target 으로 옮기고 source 를 지웁니다.
+    func mergeCluster(_ source: Int64, into target: Int64) throws {
+        try locked {
+            try execute("BEGIN IMMEDIATE")
+            do {
+                try run("UPDATE subjects SET cluster_id = ? WHERE cluster_id = ?") { stmt in
+                    sqlite3_bind_int64(stmt, 1, target)
+                    sqlite3_bind_int64(stmt, 2, source)
+                }
+                try run("INSERT OR IGNORE INTO subject_rejections (subject_id, cluster_id) SELECT subject_id, ? FROM subject_rejections WHERE cluster_id = ?") { stmt in
+                    sqlite3_bind_int64(stmt, 1, target)
+                    sqlite3_bind_int64(stmt, 2, source)
+                }
+                try run("DELETE FROM subject_rejections WHERE cluster_id = ?") { sqlite3_bind_int64($0, 1, source) }
+                try run("DELETE FROM clusters WHERE id = ?") { sqlite3_bind_int64($0, 1, source) }
+                try execute("COMMIT")
+            } catch {
+                try? execute("ROLLBACK")
+                throw error
+            }
+        }
+    }
+
+    func deleteClusters(_ ids: Set<Int64>) throws {
+        guard !ids.isEmpty else { return }
+        try locked {
+            try execute("BEGIN IMMEDIATE")
+            for id in ids {
+                try run("DELETE FROM subject_rejections WHERE cluster_id = ?") { sqlite3_bind_int64($0, 1, id) }
+                try run("DELETE FROM clusters WHERE id = ?") { sqlite3_bind_int64($0, 1, id) }
+            }
+            try execute("COMMIT")
+        }
+    }
+
+    private func deleteSubjects(assetID: String) throws {
+        try run("DELETE FROM subject_rejections WHERE subject_id IN (SELECT id FROM subjects WHERE asset_id = ?)") {
+            sqlite3_bind_text($0, 1, assetID, -1, Self.transient)
+        }
+        try run("DELETE FROM subjects WHERE asset_id = ?") { sqlite3_bind_text($0, 1, assetID, -1, Self.transient) }
+    }
+
+    private static func subject(from row: OpaquePointer?) -> StoredSubject? {
+        guard let species = Species(rawValue: Int(sqlite3_column_int(row, 2))) else { return nil }
+        return StoredSubject(
+            id: sqlite3_column_int64(row, 0),
+            assetID: String(cString: sqlite3_column_text(row, 1)),
+            species: species,
+            box: CGRect(
+                x: sqlite3_column_double(row, 3),
+                y: sqlite3_column_double(row, 4),
+                width: sqlite3_column_double(row, 5),
+                height: sqlite3_column_double(row, 6)
+            ),
+            quality: Float(sqlite3_column_double(row, 7)),
+            clusterID: sqlite3_column_type(row, 8) == SQLITE_NULL ? nil : sqlite3_column_int64(row, 8),
+            assignment: SubjectAssignment(rawValue: Int(sqlite3_column_int(row, 9))) ?? .auto
+        )
+    }
+
+    private static func vector(from row: OpaquePointer?, column: Int32, dimension: Int) -> [Float]? {
+        guard Int(sqlite3_column_bytes(row, column)) == dimension * MemoryLayout<Float>.size,
+              let blob = sqlite3_column_blob(row, column) else { return nil }
+        return Array(UnsafeBufferPointer(start: blob.assumingMemoryBound(to: Float.self), count: dimension))
     }
 
     func loadVectors(model: String, dimension: Int) throws -> [StoredVector] {

@@ -55,8 +55,18 @@ final class AppModel {
     }
     /// 실제로 모델에 들어간 영어 검색어. 검색 품질을 확인하는 용도로 화면에 보여줍니다.
     private(set) var interpretedQuery: String?
+    /// 결과가 유사도 순인지. 이름만으로 검색하면 최신순이라 일치도와 "관련도 낮은 사진" 버튼을 숨깁니다.
+    private(set) var isRankedSearch = true
     var scope: MediaScope = .all
     var errorMessage: String?
+
+    /// 인물 화면에 보여줄 그룹. 분석이 진행되면 주기적으로 갱신됩니다.
+    private(set) var groups: [SubjectGroup] = []
+    /// 사용자가 붙인 이름 목록. 검색 칩과 검색어 속 이름 인식에 씁니다.
+    private(set) var subjectNames: [String] = []
+    /// 검색 칩에서 고른 이름. 검색어와 함께 적용됩니다.
+    var selectedNames: Set<String> = []
+    private(set) var recognizesFaces = false
 
     let settings = IndexSettings()
     let translator = QueryTranslator()
@@ -64,6 +74,7 @@ final class AppModel {
     @ObservationIgnored private var encoder: CLIPEncoder?
     @ObservationIgnored private var store: IndexStore?
     @ObservationIgnored private var indexer: Indexer?
+    @ObservationIgnored private var clusterer: SubjectClusterer?
     @ObservationIgnored private let searchIndex = SearchIndex()
     @ObservationIgnored private let network = NetworkMonitor()
     @ObservationIgnored private var indexTask: Task<Void, Never>?
@@ -71,8 +82,9 @@ final class AppModel {
     @ObservationIgnored private var observer: LibraryObserver?
     @ObservationIgnored private var searchGeneration = 0
     @ObservationIgnored private var queryVectors: [String: [Float]] = [:]
-    @ObservationIgnored private var activeSearch: (vector: [Float], kind: MediaKind?)?
+    @ObservationIgnored private var activeSearch: (vector: [Float]?, kind: MediaKind?, names: [String])?
     @ObservationIgnored private var lastLiveRefresh = ContinuousClock.now
+    @ObservationIgnored private var lastGroupRefresh = ContinuousClock.now
     @ObservationIgnored private let liveRefreshInterval: Duration = .seconds(1)
     /// 이 값보다 유사도가 낮은 결과는 기본으로 숨깁니다. MobileCLIP S2 에서 맞는 결과는 대체로 0.17 이상,
     /// 엉뚱한 결과는 0.14 이하였습니다 (시뮬레이터 샘플 보관함 기준).
@@ -116,7 +128,8 @@ final class AppModel {
         guard let indexer, hasLibraryAccess, indexTask == nil else { return }
         let options = Indexer.Options(
             allowNetwork: settings.useICloud && (settings.allowCellular || !network.isExpensive),
-            includeVideos: settings.includeVideos
+            includeVideos: settings.includeVideos,
+            analyzeSubjects: settings.analyzeSubjects
         )
         isIndexing = true
         setIdleTimerDisabled(true)
@@ -138,13 +151,14 @@ final class AppModel {
         await start()
         startIndexing()
         await indexTask?.value
-        return progress.isQuickPassComplete && progress.remainingVideoScenes == 0
+        return progress.isQuickPassComplete && progress.remainingSubjects == 0 && progress.remainingVideoScenes == 0
     }
 
     /// 남은 분석이 있으면 충전 중 백그라운드 작업을 예약합니다.
     func scheduleBackgroundIndexingIfNeeded() {
         #if os(iOS)
-        guard hasLibraryAccess, isIndexing || !progress.isQuickPassComplete || progress.remainingVideoScenes > 0 else { return }
+        guard hasLibraryAccess,
+              isIndexing || !progress.isQuickPassComplete || progress.remainingSubjects > 0 || progress.remainingVideoScenes > 0 else { return }
         BackgroundIndexing.schedule()
         #endif
     }
@@ -154,6 +168,10 @@ final class AppModel {
         await indexTask?.value
         try? store?.deleteAll()
         await searchIndex.replaceAll(with: [])
+        await clusterer?.reset()
+        groups = []
+        subjectNames = []
+        selectedNames = []
         results = []
         progress = IndexProgress()
         indexedAssetCount = 0
@@ -170,10 +188,12 @@ final class AppModel {
         pendingResults = nil
         showsWeakMatches = false
 
-        guard !query.isEmpty else {
+        let chipNames = subjectNames.filter(selectedNames.contains)
+        guard !query.isEmpty || !chipNames.isEmpty else {
             results = []
             holdsResults = false
             interpretedQuery = nil
+            isRankedSearch = true
             return
         }
         guard let encoder else {
@@ -184,7 +204,10 @@ final class AppModel {
         isSearching = true
         defer { if generation == searchGeneration { isSearching = false } }
 
-        let parsed = QueryParser.parse(query)
+        let parsed = QueryParser.parse(query, names: subjectNames)
+        var names = chipNames
+        for name in parsed.names where !names.contains(name) { names.append(name) }
+
         var english = parsed.text
         if QueryParser.containsHangul(english) {
             do {
@@ -195,10 +218,12 @@ final class AppModel {
             }
         }
         guard generation == searchGeneration else { return }
-        interpretedQuery = english
+        interpretedQuery = [names.joined(separator: ", "), english].filter { !$0.isEmpty }.joined(separator: " · ")
 
-        let queryVector: [Float]
-        if let cached = queryVectors[english] {
+        var queryVector: [Float]?
+        if english.isEmpty {
+            queryVector = nil
+        } else if let cached = queryVectors[english] {
             queryVector = cached
         } else {
             let prompts = QueryParser.prompts(for: english)
@@ -213,11 +238,12 @@ final class AppModel {
         }
 
         let kind = scope.kind ?? parsed.kind
-        let items = await resultItems(for: queryVector, kind: kind)
+        let items = await resultItems(for: queryVector, kind: kind, names: names)
         guard generation == searchGeneration else { return }
         results = items
+        isRankedSearch = queryVector != nil
         if items.isEmpty { holdsResults = false }
-        activeSearch = (queryVector, kind)
+        activeSearch = (queryVector, kind, names)
         lastLiveRefresh = .now
     }
 
@@ -225,7 +251,7 @@ final class AppModel {
         guard let activeSearch, !showsWeakMatches else { return }
         showsWeakMatches = true
         let generation = searchGeneration
-        let items = await resultItems(for: activeSearch.vector, kind: activeSearch.kind)
+        let items = await resultItems(for: activeSearch.vector, kind: activeSearch.kind, names: activeSearch.names)
         guard generation == searchGeneration else { return }
         results = items
         pendingResults = nil
@@ -248,7 +274,7 @@ final class AppModel {
     private func refreshLiveResults() async {
         guard let activeSearch else { return }
         let generation = searchGeneration
-        let items = await resultItems(for: activeSearch.vector, kind: activeSearch.kind)
+        let items = await resultItems(for: activeSearch.vector, kind: activeSearch.kind, names: activeSearch.names)
         guard generation == searchGeneration else { return }
 
         let current = pendingResults ?? results
@@ -261,28 +287,129 @@ final class AppModel {
         }
     }
 
-    private func resultItems(for vector: [Float], kind: MediaKind?) async -> [ResultItem] {
+    /// names 가 있으면 그 인물이 모두 나오는 에셋 안에서 찾습니다. vector 가 없으면(이름만 검색) 최신순으로 보여줍니다.
+    private func resultItems(for vector: [Float]?, kind: MediaKind?, names: [String]) async -> [ResultItem] {
+        var allowed: Set<String>?
+        if !names.isEmpty {
+            let assets = await clusterer?.assetIDs(named: names) ?? []
+            guard !assets.isEmpty else { return [] }
+            allowed = assets
+        }
+
+        guard let vector else {
+            guard let allowed else { return [] }
+            return PhotoLibrary.assets(withIDs: Array(allowed)).values
+                .map { asset in (asset, asset.mediaType == .video ? MediaKind.video : .photo) }
+                .filter { kind == nil || $0.1 == kind }
+                .sorted { ($0.0.creationDate ?? .distantPast) > ($1.0.creationDate ?? .distantPast) }
+                .prefix(500)
+                .map { ResultItem(hit: SearchHit(assetID: $0.0.localIdentifier, kind: $0.1, score: nil, time: 0), asset: $0.0) }
+        }
+
         let minScore = showsWeakMatches ? -Float.infinity : minimumScore
-        let hits = await searchIndex.search(vector, kind: kind, minScore: minScore, limit: 120)
+        let hits = await searchIndex.search(vector, kind: kind, assets: allowed, minScore: minScore, limit: 120)
         let assets = PhotoLibrary.assets(withIDs: hits.map(\.assetID))
         return hits.compactMap { hit in assets[hit.assetID].map { ResultItem(hit: hit, asset: $0) } }
+    }
+
+    // MARK: - People
+
+    func group(id: Int64) -> SubjectGroup? {
+        groups.first { $0.id == id }
+    }
+
+    func members(of clusterID: Int64) async -> [StoredSubject] {
+        await clusterer?.members(of: clusterID) ?? []
+    }
+
+    func subjects(inAsset assetID: String) async -> [(subject: StoredSubject, name: String?)] {
+        await clusterer?.subjects(inAsset: assetID) ?? []
+    }
+
+    /// 같은 이름의 그룹이 있으면 합쳐지므로, 화면이 따라갈 수 있게 남은 그룹 ID 를 돌려줍니다.
+    @discardableResult
+    func renameGroup(_ clusterID: Int64, to name: String) async -> Int64 {
+        guard let clusterer else { return clusterID }
+        do {
+            let id = try await clusterer.rename(clusterID, to: name)
+            await peopleDidChange()
+            return id
+        } catch {
+            errorMessage = error.localizedDescription
+            return clusterID
+        }
+    }
+
+    func reject(subjects subjectIDs: [Int64], from clusterID: Int64) async {
+        guard let clusterer else { return }
+        do {
+            try await clusterer.reject(subjectIDs, from: clusterID)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        await peopleDidChange()
+    }
+
+    @discardableResult
+    func nameSubject(_ subjectID: Int64, as name: String) async -> Int64? {
+        guard let clusterer else { return nil }
+        do {
+            let id = try await clusterer.name(subject: subjectID, as: name)
+            await peopleDidChange()
+            return id
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func refreshGroups() async {
+        guard let clusterer else { return }
+        groups = await clusterer.groups()
+        subjectNames = await clusterer.names()
+        selectedNames.formIntersection(subjectNames)
+        lastGroupRefresh = .now
+    }
+
+    private func peopleDidChange() async {
+        await refreshGroups()
+        if activeSearch?.names.isEmpty == false {
+            await refreshLiveResults()
+        }
     }
 
     // MARK: - Private
 
     private func loadEngine() async {
         do {
-            let (encoder, store, vectors) = try await Task.detached(priority: .userInitiated) {
+            let (encoder, faceEncoder, store, vectors) = try await Task.detached(priority: .userInitiated) {
                 let encoder = try CLIPEncoder()
+                // 얼굴 모델이 없으면(make face-model 을 안 한 경우) 반려동물만 구분합니다.
+                let faceEncoder = try? FaceEncoder()
                 let store = try IndexStore.openDefault()
                 let vectors = try store.loadVectors(model: CLIPEncoder.modelName, dimension: CLIPEncoder.dimension)
-                return (encoder, store, vectors)
+                return (encoder, faceEncoder, store, vectors)
             }.value
             await searchIndex.replaceAll(with: vectors)
+            let clusterer = SubjectClusterer(store: store)
+            do {
+                try await clusterer.load()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
             self.encoder = encoder
             self.store = store
-            indexer = Indexer(store: store, searchIndex: searchIndex, encoder: encoder)
+            self.clusterer = clusterer
+            recognizesFaces = faceEncoder != nil
+            indexer = Indexer(
+                store: store,
+                searchIndex: searchIndex,
+                encoder: encoder,
+                subjectDetector: SubjectDetector(faceEncoder: faceEncoder, clipEncoder: encoder),
+                clusterer: clusterer
+            )
             indexedAssetCount = await searchIndex.assetCount
+            await refreshGroups()
             isEngineReady = true
             // Core ML 은 첫 추론에서 모델을 연산 장치에 올리느라 수 초가 걸리므로 첫 검색 전에 미리 한 번 돌려 둡니다.
             Task.detached(priority: .userInitiated) { _ = try? encoder.embed(text: "a photo") }
@@ -313,6 +440,9 @@ final class AppModel {
         self.progress = progress
         if isIndexing { setIdleTimerDisabled(!progress.isQuickPassComplete) }
         indexedAssetCount = await searchIndex.assetCount
+        if progress.subjectsDone > 0, ContinuousClock.now - lastGroupRefresh >= liveRefreshInterval {
+            await refreshGroups()
+        }
         if activeSearch != nil, ContinuousClock.now - lastLiveRefresh >= liveRefreshInterval {
             lastLiveRefresh = .now
             await refreshLiveResults()
@@ -323,6 +453,7 @@ final class AppModel {
         indexTask = nil
         isIndexing = false
         setIdleTimerDisabled(false)
+        await refreshGroups()
         await refreshLiveResults()
     }
 

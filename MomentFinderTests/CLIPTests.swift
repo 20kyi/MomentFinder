@@ -256,3 +256,30 @@ struct QueryParserTests {
         #expect(parsed.text == "cat yawning")
     }
 }
+
+struct QueryGlossaryTests {
+    @Test func translatesKnownWords() {
+        #expect(QueryGlossary.translate("고양이 하품") == "cat yawning")
+        #expect(QueryGlossary.translate("고양이가 하품하는") == "cat yawning")
+        #expect(QueryGlossary.translate("고양이들이 하품하고 있는") == "cat yawning")
+        #expect(QueryGlossary.translate("고양이하품") == "cat yawning")
+        #expect(QueryGlossary.translate("바닷가 일몰") == "beach sunset")
+        #expect(QueryGlossary.translate("생일 케이크 촛불") == "birthday cake candles")
+        #expect(QueryGlossary.translate("강아지랑 산책") == "dog walking")
+    }
+
+    @Test func leavesUnknownWordsToTranslator() {
+        #expect(QueryGlossary.translate("눈 오는 거리") == nil)
+        #expect(QueryGlossary.translate("내가 고양이를 안고있는") == nil)
+        #expect(QueryGlossary.translate("집중") == nil)
+        #expect(QueryGlossary.translate("공항") == nil)
+        #expect(QueryGlossary.translate("있는") == nil)
+    }
+
+    @MainActor @Test func rejectsMadeUpEnglish() {
+        #expect(QueryTranslator.looksLikeEnglish("Cat yawn"))
+        #expect(QueryTranslator.looksLikeEnglish("Sunset by the beach"))
+        #expect(!QueryTranslator.looksLikeEnglish("cat snawn"))
+        #expect(!QueryTranslator.looksLikeEnglish("고양이 yawn"))
+    }
+}

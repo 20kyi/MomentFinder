@@ -88,6 +88,14 @@ final class SearchFlowUITests: XCTestCase {
         XCTAssertTrue(waitUntil { strip.element(boundBy: 2).isSelected }, "썸네일을 눌러도 이동하지 않았습니다")
         sleep(1)
         attachScreenshot("11-tapped-strip")
+
+        let start = strip.element(boundBy: 2).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 38, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.3)
+        XCTAssertTrue(waitUntil { strip.element(boundBy: 1).isSelected }, "썸네일 줄을 한 칸 넘겨도 바로 옆 결과가 선택되지 않았습니다")
+        let selectedFrame = strip.element(boundBy: 1).frame
+        XCTAssertEqual(selectedFrame.midX, app.windows.firstMatch.frame.midX, accuracy: 4, "선택된 썸네일이 가운데에 있지 않습니다")
+        sleep(1)
+        attachScreenshot("12-scrubbed-strip")
     }
 
     /// 인물 분석이 끝나면 인물 화면에서 그룹을 보고 이름을 붙인 뒤, 그 이름이 검색 칩으로 나타나야 합니다.

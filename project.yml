@@ -27,6 +27,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UIBackgroundModes: [processing]
+        LSHasLocalizedDisplayName: true
         BGTaskSchedulerPermittedIdentifiers: [com.youngim.momentfinder.indexing]
     settings:
       base:

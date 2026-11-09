@@ -1,0 +1,3 @@
+"CFBundleDisplayName" = "Moment Finder";
+"CFBundleName" = "Moment Finder";
+"NSPhotoLibraryUsageDescription" = "Moment Finder analyzes your photos and videos on device so you can search them with phrases like \"cat yawning\" and tell apart the people and pets in them. Your photos and face data never leave your device.";

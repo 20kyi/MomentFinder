@@ -11,6 +11,9 @@ struct ResultItem: Identifiable, Hashable {
 
     var id: String { hit.assetID }
 
+    /// 검색어로 찾은 장면이 있는지. 보관함에서 바로 고르거나 이름만으로 고른 동영상은 처음부터 보여줍니다.
+    var hasMoment: Bool { hit.score != nil }
+
     /// PHAsset 은 가져온 시점의 값이라, 즐겨찾기가 바뀌면 새로 가져온 에셋과 다르게 비교되어야 화면이 갱신됩니다.
     static func == (lhs: ResultItem, rhs: ResultItem) -> Bool {
         lhs.hit == rhs.hit && lhs.asset.isFavorite == rhs.asset.isFavorite
@@ -25,6 +28,37 @@ struct ResultItem: Identifiable, Hashable {
         guard !items.isEmpty else { return items }
         let assets = PhotoLibrary.assets(withIDs: items.map(\.id))
         return items.compactMap { item in assets[item.id].map { ResultItem(hit: item.hit, asset: $0) } }
+    }
+}
+
+extension ResultItem {
+    /// 검색 없이 보관함에서 바로 고른 항목. 순위와 장면이 없습니다.
+    init(asset: PHAsset) {
+        let kind: MediaKind = asset.mediaType == .video ? .video : .photo
+        self.init(hit: SearchHit(assetID: asset.localIdentifier, kind: kind, score: nil, time: 0), asset: asset)
+    }
+}
+
+/// 홈 갤러리에서 같은 날 찍은 사진·동영상 묶음.
+struct LibraryDay: Identifiable {
+    /// 그날 0시. 촬영일이 없는 항목끼리 묶으면 nil 입니다.
+    let date: Date?
+    var items: [ResultItem]
+
+    var id: String { items[0].id }
+
+    /// 최신순 목록을 순서를 지키며 촬영일별로 묶습니다.
+    static func grouping(_ items: [ResultItem], calendar: Calendar = .current) -> [LibraryDay] {
+        var days: [LibraryDay] = []
+        for item in items {
+            let date = item.asset.creationDate.map(calendar.startOfDay(for:))
+            if let last = days.last, last.date == date {
+                days[days.count - 1].items.append(item)
+            } else {
+                days.append(LibraryDay(date: date, items: [item]))
+            }
+        }
+        return days
     }
 }
 
@@ -59,6 +93,10 @@ final class AppModel {
     private(set) var progress = IndexProgress()
     private(set) var indexedAssetCount = 0
 
+    /// 홈 화면 갤러리에 보여줄 보관함 전체. 검색어·필터와 상관없이 최신순입니다.
+    private(set) var libraryItems: [ResultItem] = []
+    /// libraryItems 를 촬영일별로 나눈 것. 갤러리를 날짜 구분으로 그릴 때 씁니다.
+    private(set) var libraryDays: [LibraryDay] = []
     private(set) var results: [ResultItem] = []
     /// 사용자가 결과를 스크롤해 보는 중에 분석으로 새로 생긴 결과. 화면이 갑자기 바뀌지 않도록 따로 보관합니다.
     private(set) var pendingResults: [ResultItem]?
@@ -97,6 +135,7 @@ final class AppModel {
     @ObservationIgnored private let network = NetworkMonitor()
     @ObservationIgnored private var indexTask: Task<Void, Never>?
     @ObservationIgnored private var changeTask: Task<Void, Never>?
+    @ObservationIgnored private var libraryLoad: Task<Void, Never>?
     @ObservationIgnored private var observer: LibraryObserver?
     @ObservationIgnored private var searchGeneration = 0
     @ObservationIgnored private var queryVectors: [String: [Float]] = [:]
@@ -316,12 +355,11 @@ final class AppModel {
 
         guard let vector else {
             guard let allowed else { return [] }
-            return PhotoLibrary.assets(withIDs: Array(allowed)).values
-                .map { asset in (asset, asset.mediaType == .video ? MediaKind.video : .photo) }
-                .filter { kind == nil || $0.1 == kind }
-                .sorted { ($0.0.creationDate ?? .distantPast) > ($1.0.creationDate ?? .distantPast) }
-                .prefix(500)
-                .map { ResultItem(hit: SearchHit(assetID: $0.0.localIdentifier, kind: $0.1, score: nil, time: 0), asset: $0.0) }
+            let items = PhotoLibrary.assets(withIDs: Array(allowed)).values
+                .map(ResultItem.init(asset:))
+                .filter { kind == nil || $0.hit.kind == kind }
+                .sorted { ($0.asset.creationDate ?? .distantPast) > ($1.asset.creationDate ?? .distantPast) }
+            return Array(items.prefix(500))
         }
 
         let minScore = showsWeakMatches ? -Float.infinity : minimumScore
@@ -449,11 +487,26 @@ final class AppModel {
                 Task { @MainActor in self?.libraryDidChange() }
             }
         }
+        reloadLibrary()
         startIndexing()
+    }
+
+    private func reloadLibrary() {
+        libraryLoad?.cancel()
+        libraryLoad = Task { [weak self] in
+            let (items, days) = await Task.detached(priority: .userInitiated) {
+                let items = PhotoLibrary.fetchAllAssets().map(ResultItem.init(asset:))
+                return (items, LibraryDay.grouping(items))
+            }.value
+            guard !Task.isCancelled else { return }
+            self?.libraryItems = items
+            self?.libraryDays = days
+        }
     }
 
     private func libraryDidChange() {
         libraryRevision += 1
+        reloadLibrary()
         results = ResultItem.refetched(results)
         pendingResults = pendingResults.map(ResultItem.refetched)
         changeTask?.cancel()

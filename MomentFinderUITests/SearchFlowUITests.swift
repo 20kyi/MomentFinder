@@ -260,6 +260,27 @@ final class SearchFlowUITests: XCTestCase {
         attachScreenshot("8-chip-filter")
     }
 
+    /// 검색하지 않아도 홈 화면에서 보관함 전체를 사진 앱처럼 보고, 눌러서 크게 볼 수 있어야 합니다.
+    func testShowsWholeLibraryOnHome() throws {
+        app.launch()
+        grantPhotoAccessIfNeeded()
+
+        let items = app.buttons.matching(identifier: "library-item")
+        XCTAssertTrue(items.firstMatch.waitForExistence(timeout: 30), "홈 화면에 보관함 갤러리가 없습니다")
+        XCTAssertTrue(app.staticTexts["모든 사진"].exists)
+        XCTAssertTrue(app.staticTexts["library-day-header"].exists, "갤러리가 날짜로 나뉘지 않았습니다")
+        app.swipeUp()
+        attachScreenshot("23-home-library")
+
+        // 내비게이션 바나 검색창 밑에 걸친 항목을 누르면 바가 탭을 받으므로, 화면 가운데에 온전히 보이는 항목을 고릅니다.
+        let visible = app.windows.firstMatch.frame.insetBy(dx: 0, dy: 150)
+        let item = try XCTUnwrap((0..<items.count).lazy.map { items.element(boundBy: $0) }.first { visible.contains($0.frame) })
+        item.tap()
+        XCTAssertTrue(app.buttons["favorite-button"].waitForExistence(timeout: 10), "갤러리 항목을 눌러도 상세 화면이 열리지 않았습니다")
+        XCTAssertFalse(app.buttons["moment-button"].exists, "검색하지 않은 항목에 찾은 장면 버튼이 보입니다")
+        attachScreenshot("24-home-library-detail")
+    }
+
     private func search(_ text: String) {
         let field = app.searchFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10))

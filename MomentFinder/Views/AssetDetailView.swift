@@ -139,7 +139,7 @@ struct AssetDetailView: View {
         let toggleChrome = { withAnimation(.easeInOut(duration: 0.2)) { chromeHidden.toggle() } }
         Group {
             if item.hit.kind == .video {
-                VideoMomentView(asset: item.asset, momentTime: item.hit.time, isActive: isActive,
+                VideoMomentView(asset: item.asset, momentTime: item.hasMoment ? item.hit.time : nil, isActive: isActive,
                                 onTap: toggleChrome, activePlayback: $activePlayback)
             } else {
                 PhotoDetailView(asset: item.asset, onTap: toggleChrome)
@@ -289,8 +289,9 @@ private final class VideoPlayback {
 
     let asset: PHAsset
     var assetID: String { asset.localIdentifier }
-    /// 검색어와 가장 잘 맞는 장면. 1초 전부터 재생합니다.
-    let momentTime: Double
+    /// 검색어와 가장 잘 맞는 장면. 1초 전부터 재생합니다. 보관함에서 바로 연 동영상처럼 찾은 장면이 없으면 nil 입니다.
+    let momentTime: Double?
+    var startTime: Double { momentTime.map { $0 - 1 } ?? 0 }
     var clipState = ClipState.idle
     var player: AVPlayer?
     /// 옆 페이지로 미리 불러온 동영상은 불러온 뒤에도 재생하지 않습니다.
@@ -302,7 +303,7 @@ private final class VideoPlayback {
     var duration: Double = 0
     var frames: [PlatformImage] = []
 
-    init(asset: PHAsset, momentTime: Double) {
+    init(asset: PHAsset, momentTime: Double?) {
         self.asset = asset
         self.momentTime = momentTime
     }
@@ -312,7 +313,7 @@ private final class VideoPlayback {
         let player = AVPlayer(playerItem: item)
         player.isMuted = isMuted
         self.player = player
-        play(from: momentTime - 1, autoplay: playsWhenReady)
+        play(from: startTime, autoplay: playsWhenReady)
         while !Task.isCancelled {
             if !isScrubbing { currentTime = player.currentTime().seconds }
             isPlaying = player.timeControlStatus != .paused
@@ -364,7 +365,7 @@ private struct VideoMomentView: View {
     @State private var playback: VideoPlayback
     @State private var containerSize: CGSize = .zero
 
-    init(asset: PHAsset, momentTime: Double, isActive: Bool, onTap: @escaping () -> Void, activePlayback: Binding<VideoPlayback?>) {
+    init(asset: PHAsset, momentTime: Double?, isActive: Bool, onTap: @escaping () -> Void, activePlayback: Binding<VideoPlayback?>) {
         self.asset = asset
         self.isActive = isActive
         self.onTap = onTap
@@ -395,7 +396,7 @@ private struct VideoMomentView: View {
             playback.playsWhenReady = isActive
             if isActive {
                 activePlayback = playback
-                playback.play(from: playback.momentTime - 1)
+                playback.play(from: playback.startTime)
             } else {
                 playback.player?.pause()
             }
@@ -412,22 +413,24 @@ private struct VideoControls: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 8) {
-                Button {
-                    playback.play(from: playback.momentTime - 1)
-                } label: {
-                    Label("찾은 장면 \(TimeFormatter.string(playback.momentTime))", systemImage: "scope")
+            if let momentTime = playback.momentTime {
+                HStack(spacing: 8) {
+                    Button {
+                        playback.play(from: playback.startTime)
+                    } label: {
+                        Label("찾은 장면 \(TimeFormatter.string(momentTime))", systemImage: "scope")
+                    }
+                    .glassButtonStyle(prominent: true)
+                    .accessibilityIdentifier("moment-button")
+                    Button {
+                        playback.play(from: 0)
+                    } label: {
+                        Label("처음부터", systemImage: "backward.end")
+                    }
+                    .glassButtonStyle(prominent: false)
                 }
-                .glassButtonStyle(prominent: true)
-                .accessibilityIdentifier("moment-button")
-                Button {
-                    playback.play(from: 0)
-                } label: {
-                    Label("처음부터", systemImage: "backward.end")
-                }
-                .glassButtonStyle(prominent: false)
+                .buttonBorderShape(.capsule)
             }
-            .buttonBorderShape(.capsule)
 
             HStack(spacing: 8) {
                 Button {
@@ -499,7 +502,7 @@ private struct ClipMenu: View {
     }
 
     private func saveClip(length: Double) {
-        let range = VideoClip.range(around: playback.momentTime, length: length, duration: playback.duration)
+        let range = VideoClip.range(around: playback.momentTime ?? playback.currentTime, length: length, duration: playback.duration)
         playback.clipState = .saving
         Task {
             do {

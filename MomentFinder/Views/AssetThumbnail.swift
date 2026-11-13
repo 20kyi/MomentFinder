@@ -25,7 +25,7 @@ struct AssetThumbnail: View {
                         .shadow(radius: 1)
                         .padding(3)
                 } else if item.hit.kind == .video {
-                    Label(TimeFormatter.string(item.hit.time), systemImage: "play.fill")
+                    Label(TimeFormatter.string(item.hasMoment ? item.hit.time : item.asset.duration), systemImage: "play.fill")
                         .font(.caption2.monospacedDigit().weight(.semibold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)

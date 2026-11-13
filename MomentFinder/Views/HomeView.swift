@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 검색어가 없을 때 보이는 첫 화면. 분석 중일 때만 진행 상태를 한 줄로 보여주고, 평소에는 인물과 예시 검색어만 둡니다.
+/// 검색어가 없을 때 보이는 첫 화면. 분석 중일 때만 진행 상태를 한 줄로 보여주고, 인물과 예시 검색어 아래에 보관함 전체를 사진 앱처럼 늘어놓습니다.
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     let onShowStatus: () -> Void
@@ -24,11 +24,79 @@ struct HomeView: View {
                         .foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity)
                 }
+                if !model.libraryItems.isEmpty {
+                    LibraryGrid()
+                }
             }
             .padding(.vertical)
         }
         .animation(.default, value: IndexStage(model: model) == nil)
         .animation(.default, value: model.groups.isEmpty)
+    }
+}
+
+/// 검색이나 필터 없이 보관함 전체를 최신순으로 보여주는 갤러리.
+/// 분석 진행률이 바뀔 때마다 홈 화면이 다시 그려지므로, 수만 개의 썸네일을 다시 계산하지 않도록 인자 없는 뷰로 둡니다.
+private struct LibraryGrid: View {
+    @Environment(AppModel.self) private var model
+    @State private var selection: ResultItem?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("모든 사진")
+                    .font(.headline)
+                Spacer()
+                Text("\(model.libraryItems.count)개")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 2)], spacing: 2) {
+                ForEach(model.libraryDays) { day in
+                    Section {
+                        ForEach(day.items) { item in
+                            Button { selection = item } label: {
+                                AssetThumbnail(item: item)
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu { AssetContextMenu(item: item) }
+                            .accessibilityIdentifier("library-item")
+                        }
+                    } header: {
+                        Text(Self.title(for: day.date))
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal)
+                            .padding(.top, 14)
+                            .padding(.bottom, 6)
+                            .accessibilityAddTraits(.isHeader)
+                            .accessibilityIdentifier("library-day-header")
+                    }
+                }
+            }
+        }
+        .navigationDestination(item: $selection) { AssetDetailView(item: $0, in: neighbors(of: $0)) }
+    }
+
+    /// 사진 앱처럼 최근 이틀은 오늘·어제로, 올해는 요일까지, 그 전은 연도까지 적습니다.
+    private static func title(for date: Date?) -> String {
+        guard let date else { return "날짜 없음" }
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "오늘" }
+        if calendar.isDateInYesterday(date) { return "어제" }
+        if calendar.isDate(date, equalTo: .now, toGranularity: .year) {
+            return date.formatted(.dateTime.month().day().weekday(.wide))
+        }
+        return date.formatted(.dateTime.year().month().day())
+    }
+
+    /// 상세 화면은 넘겨받은 목록 전체를 보관함이 바뀔 때마다 다시 가져오므로, 누른 항목 주변만 넘깁니다.
+    private func neighbors(of item: ResultItem) -> [ResultItem] {
+        let items = model.libraryItems
+        guard let index = items.firstIndex(where: { $0.id == item.id }) else { return [item] }
+        return Array(items[max(0, index - 300)..<min(items.count, index + 301)])
     }
 }
 

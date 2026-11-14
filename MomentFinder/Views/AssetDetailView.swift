@@ -311,6 +311,10 @@ private final class VideoPlayback {
     var startTime: Double { momentTime.map { $0 - 1 } ?? 0 }
     var clipState = ClipState.idle
     var player: AVPlayer?
+    /// iCloud 에서 스트리밍하다 네트워크가 끊기면 true 가 됩니다. 이때는 player 를 비워 컨트롤도 숨깁니다.
+    private(set) var loadFailed = false
+    /// 다시 시도할 때마다 올려 load 를 새로 시작합니다.
+    private(set) var loadAttempt = 0
     /// 옆 페이지로 미리 불러온 동영상은 불러온 뒤에도 재생하지 않습니다.
     var playsWhenReady = false
     var isPlaying = false
@@ -326,17 +330,33 @@ private final class VideoPlayback {
     }
 
     func load(_ asset: PHAsset) async {
-        guard let item = await PhotoLibrary.playerItem(for: asset) else { return }
+        guard let item = await PhotoLibrary.playerItem(for: asset) else {
+            if !Task.isCancelled { loadFailed = true }
+            return
+        }
         let player = AVPlayer(playerItem: item)
         player.isMuted = isMuted
         self.player = player
         play(from: startTime, autoplay: playsWhenReady)
         while !Task.isCancelled {
+            if item.status == .failed {
+                player.pause()
+                self.player = nil
+                isPlaying = false
+                loadFailed = true
+                return
+            }
             if !isScrubbing { currentTime = player.currentTime().seconds }
             isPlaying = player.timeControlStatus != .paused
             if item.duration.isNumeric { duration = item.duration.seconds }
             try? await Task.sleep(for: .milliseconds(250))
         }
+    }
+
+    /// 실패한 AVPlayerItem 은 다시 쓸 수 없어서, 아이템부터 새로 요청합니다.
+    func retry() {
+        loadFailed = false
+        loadAttempt += 1
     }
 
     func play(from time: Double, autoplay: Bool = true) {
@@ -397,6 +417,8 @@ private struct VideoMomentView: View {
                 PlayerSurface(player: player)
                     .frame(width: frame.width, height: frame.height)
                     .clipped()
+            } else if playback.loadFailed {
+                VideoLoadFailedView { playback.retry() }
             } else {
                 ProgressView("동영상 불러오는 중…")
             }
@@ -405,7 +427,7 @@ private struct VideoMomentView: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { containerSize = $0 }
-        .task(id: asset.localIdentifier) { await playback.load(asset) }
+        .task(id: playback.loadAttempt) { await playback.load(asset) }
         .task(id: asset.localIdentifier) {
             playback.frames = await PhotoLibrary.filmstrip(for: asset, count: 10, side: 120)
         }
@@ -612,6 +634,23 @@ private extension View {
             if prominent { buttonStyle(.glassProminent) } else { buttonStyle(.glass) }
         } else {
             if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered) }
+        }
+    }
+}
+
+/// iCloud 에만 있는 동영상을 스트리밍하지 못했을 때 보여줍니다.
+struct VideoLoadFailedView: View {
+    let retry: () -> Void
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("동영상을 불러오지 못했어요", systemImage: "icloud.slash")
+        } description: {
+            Text("iCloud에서 동영상을 받아오지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.")
+        } actions: {
+            Button("다시 시도", action: retry)
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("video-retry-button")
         }
     }
 }

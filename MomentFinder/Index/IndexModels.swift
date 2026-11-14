@@ -35,6 +35,12 @@ struct SearchHit: Identifiable, Hashable, Sendable {
     var id: String { assetID }
 }
 
+/// 동영상 프레임 하나와 검색어의 유사도.
+struct FrameScore: Sendable, Hashable {
+    let time: Double
+    let score: Float
+}
+
 struct IndexProgress: Sendable, Equatable {
     /// 사진과 동영상 대표 이미지 분석. 이것이 끝나면 모든 에셋이 검색됩니다.
     var total = 0

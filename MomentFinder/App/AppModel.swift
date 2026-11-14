@@ -368,6 +368,12 @@ final class AppModel {
         return hits.compactMap { hit in assets[hit.assetID].map { ResultItem(hit: hit, asset: $0) } }
     }
 
+    /// 지금 검색어와 동영상 각 장면의 유사도. 이름만으로 검색해 검색어 벡터가 없으면 빈 배열입니다.
+    func frameScores(for assetID: String) async -> [FrameScore] {
+        guard let vector = activeSearch?.vector else { return [] }
+        return await searchIndex.frameScores(vector, assetID: assetID)
+    }
+
     // MARK: - Editing
 
     func setFavorite(_ isFavorite: Bool, for item: ResultItem) async {

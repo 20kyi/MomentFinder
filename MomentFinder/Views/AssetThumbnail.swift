@@ -69,4 +69,10 @@ enum TimeFormatter {
         let total = max(0, Int(seconds.rounded(.down)))
         return String(format: "%d:%02d", total / 60, total % 60)
     }
+
+    /// 클립 구간처럼 0.1초 단위까지 보여야 할 때 씁니다.
+    static func precise(_ seconds: Double) -> String {
+        let tenths = max(0, Int((seconds * 10).rounded()))
+        return String(format: "%d:%02d.%d", tenths / 600, tenths / 10 % 60, tenths % 10)
+    }
 }

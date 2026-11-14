@@ -97,7 +97,7 @@ struct AssetDetailView: View {
                 Spacer()
                 #endif
                 if let currentPlayback {
-                    ClipMenu(playback: currentPlayback)
+                    ClipButton(playback: currentPlayback)
                     #if os(iOS)
                     Spacer()
                     #endif
@@ -302,14 +302,13 @@ private struct PhotoDetailView: View {
 /// 동영상 한 개의 재생 상태. 화면은 페이지 안에서 그리고, 컨트롤은 썸네일 줄 위에서 같은 상태를 씁니다.
 @MainActor @Observable
 private final class VideoPlayback {
-    enum ClipState { case idle, saving, saved }
-
     let asset: PHAsset
     var assetID: String { asset.localIdentifier }
     /// 검색어와 가장 잘 맞는 장면. 1초 전부터 재생합니다. 보관함에서 바로 연 동영상처럼 찾은 장면이 없으면 nil 입니다.
     let momentTime: Double?
     var startTime: Double { momentTime.map { $0 - 1 } ?? 0 }
-    var clipState = ClipState.idle
+    /// 클립을 저장한 직후 잠깐 버튼을 체크 표시로 바꿉니다.
+    var showsClipSaved = false
     var player: AVPlayer?
     /// iCloud 에서 스트리밍하다 네트워크가 끊기면 true 가 됩니다. 이때는 player 를 비워 컨트롤도 숨깁니다.
     private(set) var loadFailed = false
@@ -518,43 +517,31 @@ private struct VideoControls: View {
     }
 }
 
-/// 찾은 장면을 가운데에 두고 고른 길이만큼 잘라 저장하는 메뉴. 동영상보다 짧은 길이만 고를 수 있습니다.
-private struct ClipMenu: View {
+/// 찾은 장면을 다듬어 클립으로 저장하는 편집 화면을 엽니다.
+private struct ClipButton: View {
     let playback: VideoPlayback
-    @Environment(AppModel.self) private var model
+    @State private var isEditing = false
 
     var body: some View {
-        let lengths = VideoClip.lengths.filter { $0 < playback.duration }
-        Menu {
-            Section("찾은 장면을 가운데에 두고 ‘\(VideoClip.albumTitle)’ 앨범에 저장") {
-                ForEach(lengths, id: \.self) { length in
-                    Button("\(Int(length))초") { saveClip(length: length) }
-                        .accessibilityIdentifier("clip-length-\(Int(length))")
-                }
-            }
+        Button {
+            playback.player?.pause()
+            isEditing = true
         } label: {
-            switch playback.clipState {
-            case .idle: Label("클립 저장", systemImage: "scissors")
-            case .saving: ProgressView().accessibilityLabel("클립 저장 중")
-            case .saved: Label("클립 저장됨", systemImage: "checkmark")
+            if playback.showsClipSaved {
+                Label("클립 저장됨", systemImage: "checkmark")
+            } else {
+                Label("클립 만들기", systemImage: "scissors")
             }
         }
-        .disabled(lengths.isEmpty || playback.clipState == .saving)
-        .accessibilityIdentifier("clip-menu")
-    }
-
-    private func saveClip(length: Double) {
-        let range = VideoClip.range(around: playback.momentTime ?? playback.currentTime, length: length, duration: playback.duration)
-        playback.clipState = .saving
-        Task {
-            do {
-                try await VideoClip.save(from: playback.asset, range: range)
-                playback.clipState = .saved
-                try? await Task.sleep(for: .seconds(2))
-                if playback.clipState == .saved { playback.clipState = .idle }
-            } catch {
-                playback.clipState = .idle
-                model.errorMessage = "클립을 저장하지 못했어요. \(error.localizedDescription)"
+        .disabled(playback.duration <= 0)
+        .accessibilityIdentifier("clip-button")
+        .sheet(isPresented: $isEditing) {
+            ClipEditorView(asset: playback.asset, moment: playback.momentTime ?? playback.currentTime, duration: playback.duration) {
+                playback.showsClipSaved = true
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    playback.showsClipSaved = false
+                }
             }
         }
     }
@@ -657,12 +644,13 @@ struct VideoLoadFailedView: View {
 
 /// 컨트롤 없이 화면만 그리는 플레이어. 컨트롤은 VideoMomentView 가 직접 그립니다.
 #if os(iOS)
-private struct PlayerSurface: UIViewRepresentable {
+struct PlayerSurface: UIViewRepresentable {
     let player: AVPlayer
+    var gravity: AVLayerVideoGravity = .resizeAspectFill
 
     func makeUIView(context: Context) -> PlayerLayerView {
         let view = PlayerLayerView()
-        view.playerLayer.videoGravity = .resizeAspectFill
+        view.playerLayer.videoGravity = gravity
         return view
     }
 
@@ -676,13 +664,14 @@ private struct PlayerSurface: UIViewRepresentable {
     }
 }
 #else
-private struct PlayerSurface: NSViewRepresentable {
+struct PlayerSurface: NSViewRepresentable {
     let player: AVPlayer
+    var gravity: AVLayerVideoGravity = .resizeAspectFill
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
         view.controlsStyle = .none
-        view.videoGravity = .resizeAspectFill
+        view.videoGravity = gravity
         return view
     }
 

@@ -113,6 +113,22 @@ actor SearchIndex {
         }
     }
 
+    /// 한 에셋의 모든 프레임이 검색어와 얼마나 맞는지 시각 순으로 돌려줍니다. 동영상에서 장면이 이어지는 구간을 찾는 데 씁니다.
+    func frameScores(_ query: [Float], assetID: String) -> [FrameScore] {
+        guard query.count == dimension, let slot = slotByID[assetID] else { return [] }
+        var result: [FrameScore] = []
+        matrix.withUnsafeBufferPointer { m in
+            query.withUnsafeBufferPointer { q in
+                for row in rowSlots.indices where rowSlots[row] == slot {
+                    var score: Float = 0
+                    vDSP_dotpr(m.baseAddress! + row * dimension, 1, q.baseAddress!, 1, &score, vDSP_Length(dimension))
+                    result.append(FrameScore(time: times[row], score: score))
+                }
+            }
+        }
+        return result.sorted { $0.time < $1.time }
+    }
+
     private func appendRow(assetID: String, kind: MediaKind, time: Double, vector: [Float]) {
         let slot: Int
         if let existing = slotByID[assetID] {

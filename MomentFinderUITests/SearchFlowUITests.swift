@@ -31,15 +31,40 @@ final class SearchFlowUITests: XCTestCase {
         let seconds = try XCTUnwrap(Self.seconds(in: moment.label), moment.label)
         XCTAssertGreaterThanOrEqual(seconds, 5, "고양이 장면(5초 이후)이 아닌 \(moment.label) 을 찾았습니다")
 
-        // 저장하면 보관함에 동영상이 늘어 다른 테스트 결과가 바뀌므로 메뉴만 열어 보고 닫습니다.
-        let clipMenu = app.buttons["clip-menu"]
-        XCTAssertTrue(clipMenu.waitForExistence(timeout: 10), "클립 저장 버튼이 없습니다")
-        XCTAssertTrue(clipMenu.isHittable, "클립 저장 버튼이 화면 밖에 있습니다")
-        clipMenu.tap()
-        XCTAssertTrue(app.buttons["clip-length-3"].waitForExistence(timeout: 5), "클립 길이 메뉴가 열리지 않았습니다")
+        // 저장하면 보관함에 동영상이 늘어 다른 테스트 결과가 바뀌므로 편집 화면만 열어 보고 닫습니다.
+        let clipButton = app.buttons["clip-button"]
+        XCTAssertTrue(clipButton.waitForExistence(timeout: 10), "클립 만들기 버튼이 없습니다")
+        XCTAssertTrue(clipButton.isHittable, "클립 만들기 버튼이 화면 밖에 있습니다")
+        clipButton.tap()
+
+        let scene = app.buttons["clip-length-scene"]
+        XCTAssertTrue(scene.waitForExistence(timeout: 10), "장면 맞춤 선택지가 없습니다")
+        XCTAssertTrue(scene.isSelected, "처음 구간이 찾은 장면에 맞춰지지 않았습니다")
+        XCTAssertTrue(app.buttons["clip-length-3"].exists)
         XCTAssertFalse(app.buttons["clip-length-15"].exists, "동영상보다 긴 클립 길이가 보입니다")
-        attachScreenshot("19-clip-menu")
-        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        let rangeLabel = app.staticTexts["clip-range-label"]
+        let start = try XCTUnwrap(Self.seconds(in: rangeLabel.label), rangeLabel.label)
+        XCTAssertGreaterThanOrEqual(start, 4, "장면 구간이 정지 표지판 부분까지 넓어졌습니다: \(rangeLabel.label)")
+        attachScreenshot("19-clip-editor")
+
+        app.segmentedControls["clip-aspect-picker"].buttons["릴스 9:16"].tap()
+        XCTAssertTrue(app.switches["clip-follow-toggle"].waitForExistence(timeout: 5), "9:16 옵션이 보이지 않습니다")
+        XCTAssertTrue(app.buttons["clip-save-button"].isEnabled)
+        attachScreenshot("20-clip-editor-vertical")
+
+        app.descendants(matching: .any)["clip-compare-toggle"].firstMatch.tap()
+        let fixed = app.buttons["clip-compare-fixed"]
+        XCTAssertTrue(fixed.waitForExistence(timeout: 5), "따라가기 비교 화면이 보이지 않습니다")
+        XCTAssertTrue(app.buttons["clip-compare-follow"].isSelected, "처음에는 따라가기가 골라져 있어야 합니다")
+        attachScreenshot("21-clip-editor-compare")
+        fixed.tap()
+        XCTAssertTrue(fixed.isSelected, "고정 위치를 골라도 반영되지 않았습니다")
+        XCTAssertEqual(app.switches["clip-follow-toggle"].value as? String, "0", "고정을 골랐는데 따라가기가 켜져 있습니다")
+
+        app.buttons["clip-length-3"].tap()
+        XCTAssertTrue(app.buttons["clip-length-3"].isSelected, "길이 선택이 반영되지 않았습니다")
+        app.buttons["취소"].tap()
+        XCTAssertTrue(clipButton.waitForExistence(timeout: 5), "편집 화면이 닫히지 않았습니다")
     }
 
     /// 보관함에 생일 케이크 사진이 없으므로 엉뚱한 사진 대신 "없음" 화면을 보여주고, 원하면 비슷한 사진을 볼 수 있어야 합니다.

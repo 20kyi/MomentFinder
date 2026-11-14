@@ -86,7 +86,7 @@ final class SubjectDetector: @unchecked Sendable {
 
     /// 시뮬레이터에서는 Vision 이 GPU·뉴럴 엔진 추론 컨텍스트를 만들지 못해("Could not create inference context") CPU 로 돌립니다.
     /// 이 경로의 얼굴 랜드마크는 부정확해서 시뮬레이터의 인물 구분 결과는 참고용입니다. 정확도는 실기기나 macOS 에서 확인해야 합니다.
-    private static func prepare(_ request: VNRequest) {
+    static func prepare(_ request: VNRequest) {
         #if targetEnvironment(simulator)
         guard let devices = try? request.supportedComputeStageDevices else { return }
         for (stage, candidates) in devices {

@@ -245,12 +245,29 @@ private struct ResultStrip: View {
     }
 }
 
-/// 사진·동영상을 그릴 크기. 화면보다 세로로 긴 것은 양옆에 여백이 생기지 않도록 너비를 꽉 채우고 위아래를 잘라냅니다.
-/// 화면보다 가로로 긴 것은 잘리지 않게 원본 비율 그대로 너비에 맞춥니다.
 private func mediaFrame(for asset: PHAsset, in container: CGSize) -> CGSize {
-    guard asset.pixelWidth > 0, asset.pixelHeight > 0 else { return container }
-    let ratio = CGFloat(asset.pixelWidth) / CGFloat(asset.pixelHeight)
-    return CGSize(width: container.width, height: min(container.height, container.width / ratio))
+    MediaLayout.frame(for: CGSize(width: asset.pixelWidth, height: asset.pixelHeight), in: container)
+}
+
+enum MediaLayout {
+    /// 꽉 채울 때 잘려 나가도 괜찮은 정도. 맞춘 너비가 화면 너비의 이만큼 이상이면 꽉 채웁니다.
+    static let fillThreshold: CGFloat = 0.9
+
+    /// 사진·동영상을 그릴 크기. 원본 비율 그대로 화면 안에 다 들어가게 맞춥니다.
+    /// 아이폰 세로 화면의 세로 사진처럼 화면과 비율이 거의 같을 때만 양옆 여백 대신 위아래를 조금 잘라 꽉 채웁니다.
+    /// iPad·Mac 이나 가로 모드처럼 화면이 넓을 때 세로 사진을 채우면 크게 잘리므로 여백을 둡니다.
+    static func frame(for media: CGSize, in container: CGSize) -> CGSize {
+        guard media.width > 0, media.height > 0, container.width > 0, container.height > 0 else { return container }
+        let ratio = media.width / media.height
+        if ratio >= container.width / container.height {
+            return CGSize(width: container.width, height: container.width / ratio)
+        }
+        let fittedWidth = container.height * ratio
+        if fittedWidth >= container.width * fillThreshold {
+            return container
+        }
+        return CGSize(width: fittedWidth, height: container.height)
+    }
 }
 
 private struct PhotoDetailView: View {
@@ -410,6 +427,8 @@ private struct VideoControls: View {
     let playback: VideoPlayback
 
     private static let barHeight: CGFloat = 44
+    /// iPad·Mac 처럼 넓은 화면에서 재생바가 끝까지 늘어나 끌기 어려워지지 않도록 폭을 묶어 둡니다.
+    private static let maxWidth: CGFloat = 640
 
     var body: some View {
         VStack(spacing: 10) {
@@ -473,6 +492,7 @@ private struct VideoControls: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
+        .frame(maxWidth: Self.maxWidth)
     }
 }
 

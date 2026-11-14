@@ -300,6 +300,7 @@ private struct SearchFilterBar: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .frame(maxWidth: 480)
             .padding(.horizontal)
             .padding(.vertical, 6)
             .accessibilityIdentifier("scope-picker")

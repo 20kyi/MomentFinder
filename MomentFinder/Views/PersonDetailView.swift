@@ -71,11 +71,12 @@ struct PersonDetailView: View {
                     Task { await rejectSelection() }
                 } label: {
                     Label("\(group.species.notThisOne) (\(selection.count))", systemImage: "person.crop.circle.badge.xmark")
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: 480)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
                 .padding()
+                .frame(maxWidth: .infinity)
                 .background(.bar)
             }
         }

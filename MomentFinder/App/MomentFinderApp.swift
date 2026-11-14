@@ -18,6 +18,9 @@ struct MomentFinderApp: App {
             ContentView()
                 .environment(model)
                 .task { await model.start() }
+                #if os(macOS)
+                .frame(minWidth: 520, minHeight: 560)
+                #endif
         }
         #if os(macOS)
         .defaultSize(width: 1100, height: 760)
